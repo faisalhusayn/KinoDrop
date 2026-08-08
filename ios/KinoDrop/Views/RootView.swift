@@ -1,4 +1,5 @@
 import PhotosUI
+import Foundation
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -195,7 +196,11 @@ struct TransferRow: View {
         switch transfer.state {
         case .queued: return "Queued"
         case .transferring: return "Sending"
-        case .completed: return "Done"
+        case .completed:
+            if let duration = transfer.transferDuration {
+                return "Done · \(String(format: "%.1f", duration))s"
+            }
+            return "Done"
         case .failed(let message): return message
         case .cancelled: return "Cancelled"
         }

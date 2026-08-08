@@ -19,6 +19,8 @@ struct TransferItem: Identifiable {
     let direction: Direction
     var completedBytes: Int64 = 0
     var totalBytes: Int64?
+    var preparationDuration: TimeInterval?
+    var transferDuration: TimeInterval?
     var state: State = .queued
 
     var progress: Double? {

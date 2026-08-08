@@ -1,5 +1,4 @@
 import Foundation
-import Photos
 import PhotosUI
 import SwiftUI
 
@@ -33,6 +32,7 @@ final class AppModel: ObservableObject {
     let smb = SMBClient()
     private let keychain = KeychainStore()
     private var cleanupURLs: [UUID: URL] = [:]
+    private var scopedURLs: [UUID: URL] = [:]
 
     init() {
         config = keychain.load() ?? .default
@@ -101,75 +101,59 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func enqueueUpload(localURL: URL, remoteName: String) {
+    private func enqueueUpload(
+        localURL: URL,
+        remoteName: String,
+        preparationDuration: TimeInterval? = nil,
+        cleanup: Bool = false,
+        alreadyScopedURL: URL? = nil) {
         let transfer = TransferItem(
             name: remoteName,
             direction: .upload,
-            totalBytes: fileSize(localURL))
+            totalBytes: fileSize(localURL),
+            preparationDuration: preparationDuration)
         transfers.append(transfer)
         let id = transfer.id
-        cleanupURLs[id] = localURL
+        if cleanup { cleanupURLs[id] = localURL }
+        if let alreadyScopedURL { scopedURLs[id] = alreadyScopedURL }
         Task { await upload(url: localURL, transferID: id, name: remoteName) }
     }
 
     func importPhotos(_ items: [PhotosPickerItem]) async {
+        let preparationStart = Date()
         for item in items {
-            guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
-            let extensionName = item.supportedContentTypes.first?.preferredFilenameExtension ?? "bin"
-            let originalName = photoFilename(for: item)
-                ?? "IMG_\(UUID().uuidString).\(extensionName)"
-            let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent(UUID().uuidString)
-                .appendingPathExtension(extensionName)
-
-            do {
-                try data.write(to: url, options: .atomic)
-                enqueueUpload(localURL: url, remoteName: originalName)
-            } catch {
-                errorMessage = "Could not prepare a selected photo: \(error.localizedDescription)"
-            }
+            guard let picked = try? await item.loadTransferable(type: PickedFile.self) else { continue }
+            let preparationDuration = Date().timeIntervalSince(preparationStart)
+            enqueueUpload(
+                localURL: picked.url,
+                remoteName: picked.filename,
+                preparationDuration: preparationDuration,
+                cleanup: true)
         }
     }
 
     func importFiles(_ urls: [URL]) async {
         for url in urls {
             let accessed = url.startAccessingSecurityScopedResource()
-            defer {
-                if accessed { url.stopAccessingSecurityScopedResource() }
-            }
-
-            let destination = FileManager.default.temporaryDirectory
-                .appendingPathComponent(UUID().uuidString)
-                .appendingPathExtension(url.pathExtension)
-
-            do {
-                try FileManager.default.copyItem(at: url, to: destination)
-                enqueueUpload(localURL: destination, remoteName: url.lastPathComponent)
-            } catch {
-                errorMessage = "Could not prepare \(url.lastPathComponent): \(error.localizedDescription)"
-            }
+            enqueueUpload(
+                localURL: url,
+                remoteName: url.lastPathComponent,
+                alreadyScopedURL: accessed ? url : nil)
         }
-    }
-
-    private func photoFilename(for item: PhotosPickerItem) -> String? {
-        guard let identifier = item.itemIdentifier,
-              let asset = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil).firstObject,
-              let resource = PHAssetResource.assetResources(for: asset).first else {
-            return nil
-        }
-
-        return resource.originalFilename
     }
 
     private func upload(url: URL, transferID: UUID, name: String) async {
         guard isConnected else {
             updateTransfer(transferID) { $0.state = .failed("Not connected") }
+            scopedURLs.removeValue(forKey: transferID)?.stopAccessingSecurityScopedResource()
+            try? FileManager.default.removeItem(at: cleanupURLs.removeValue(forKey: transferID) ?? url)
             return
         }
 
         updateTransfer(transferID) { $0.state = .transferring }
         let remotePath = browsePath.isEmpty ? name : "\(browsePath)/\(name)"
         let progressThrottle = ProgressThrottle()
+        let transferStart = Date()
 
         do {
             try await smb.upload(localURL: url, remotePath: remotePath) { [weak self] progress in
@@ -181,12 +165,19 @@ final class AppModel: ObservableObject {
                     }
                 }
             }
-            updateTransfer(transferID) { $0.state = .completed }
+            updateTransfer(transferID) {
+                $0.transferDuration = Date().timeIntervalSince(transferStart)
+                $0.state = .completed
+            }
         } catch {
-            updateTransfer(transferID) { $0.state = .failed(error.localizedDescription) }
+            updateTransfer(transferID) {
+                $0.transferDuration = Date().timeIntervalSince(transferStart)
+                $0.state = .failed(error.localizedDescription)
+            }
         }
 
         try? FileManager.default.removeItem(at: cleanupURLs.removeValue(forKey: transferID) ?? url)
+        scopedURLs.removeValue(forKey: transferID)?.stopAccessingSecurityScopedResource()
     }
 
     func download(_ file: RemoteFile) {
