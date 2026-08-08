@@ -64,7 +64,7 @@ final class SMBClient {
         remotePath: String,
         progress: @escaping @Sendable (SMBProgress) -> Void) async throws {
         guard let manager else { throw SMBClientError.notConnected }
-        try await manager.uploadItemPipelined(at: localURL, toPath: remotePath) { completed in
+        try await manager.uploadItem(at: localURL, toPath: remotePath) { completed in
             progress(SMBProgress(completed: completed, total: nil))
             return true
         }
