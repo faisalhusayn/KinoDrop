@@ -156,9 +156,11 @@ final class AppModel: ObservableObject {
 
         updateTransfer(transferID) { $0.state = .transferring }
         let remotePath = browsePath.isEmpty ? name : "\(browsePath)/\(name)"
+        let progressThrottle = ProgressThrottle()
 
         do {
             try await smb.upload(localURL: url, remotePath: remotePath) { [weak self] progress in
+                guard progressThrottle.shouldEmit() else { return }
                 Task { @MainActor in
                     self?.updateTransfer(transferID) {
                         $0.completedBytes = progress.completed
@@ -185,11 +187,13 @@ final class AppModel: ObservableObject {
             totalBytes: file.size)
         transfers.append(transfer)
         let id = transfer.id
+        let progressThrottle = ProgressThrottle()
 
         Task {
             updateTransfer(id) { $0.state = .transferring }
             do {
                 try await smb.download(remotePath: file.path, localURL: destination) { [weak self] progress in
+                    guard progressThrottle.shouldEmit() else { return }
                     Task { @MainActor in
                         self?.updateTransfer(id) {
                             $0.completedBytes = progress.completed
@@ -213,5 +217,20 @@ final class AppModel: ObservableObject {
 
     private func fileSize(_ url: URL) -> Int64? {
         (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
+    }
+}
+
+private final class ProgressThrottle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lastEmission = Date.distantPast
+
+    func shouldEmit() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let now = Date()
+        guard now.timeIntervalSince(lastEmission) >= 0.1 else { return false }
+        lastEmission = now
+        return true
     }
 }
