@@ -84,8 +84,8 @@ final class SMBClient {
         try await manager.uploadItemPipelined(
             at: localURL,
             toPath: remotePath,
-            chunkSize: 2_097_152,
-            pipelineSize: 8
+            chunkSize: 1_048_576,
+            pipelineSize: 16
         ) { completed in
             progress(SMBProgress(completed: completed, total: nil))
             return true
