@@ -7,11 +7,23 @@ struct SMBProgress {
     let total: Int64?
 }
 
+struct SMBConnectionDiagnostics: Equatable {
+    let dialect: String
+    let maxWriteSize: Int
+}
+
 final class SMBClient {
     private var manager: SMB2Manager?
     private let logger = Logger(subsystem: "com.faisalhusayn.kinodrop", category: "SMB")
 
     var isConnected: Bool { manager != nil }
+
+    var diagnostics: SMBConnectionDiagnostics? {
+        guard let manager else { return nil }
+        return SMBConnectionDiagnostics(
+            dialect: manager.negotiatedDialect,
+            maxWriteSize: manager.negotiatedMaxWriteSize)
+    }
 
     func connect(using config: ConnectionConfig) async throws {
         guard let serverURL = config.serverURL else {

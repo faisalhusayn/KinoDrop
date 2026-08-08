@@ -22,6 +22,7 @@ final class AppModel: ObservableObject {
 
     @Published var config: ConnectionConfig
     @Published var connectionState: ConnectionState = .disconnected
+    @Published var smbDiagnostics: SMBConnectionDiagnostics?
     @Published var transfers: [TransferItem] = []
     @Published var remoteFiles: [RemoteFile] = []
     @Published var browsePath = ""
@@ -47,6 +48,7 @@ final class AppModel: ObservableObject {
         do {
             try await smb.connect(using: config)
             try keychain.save(config)
+            smbDiagnostics = smb.diagnostics
             connectionState = .connected
             await refreshFiles()
         } catch {
@@ -57,6 +59,7 @@ final class AppModel: ObservableObject {
 
     func disconnect() async {
         await smb.disconnect()
+        smbDiagnostics = nil
         connectionState = .disconnected
         remoteFiles = []
     }

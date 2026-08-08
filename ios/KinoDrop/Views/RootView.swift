@@ -108,6 +108,13 @@ struct HomeView: View {
                         .foregroundStyle(.green)
                 }
 
+                if let diagnostics = model.smbDiagnostics {
+                    Section("SMB diagnostics") {
+                        LabeledContent("Dialect", value: diagnostics.dialect)
+                        LabeledContent("Max write size", value: "\(diagnostics.maxWriteSize) bytes")
+                    }
+                }
+
                 Section("Send") {
                     PhotosPicker(
                         selection: $photoItems,
