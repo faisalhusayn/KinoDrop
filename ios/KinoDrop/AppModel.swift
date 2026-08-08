@@ -430,7 +430,7 @@ final class AppModel: ObservableObject {
             if url.startAccessingSecurityScopedResource() {
                 scopedURLs[transfer.id] = url
             }
-            if isStale, let refreshedData = try? url.bookmarkData(options: [.withSecurityScope]) {
+            if isStale, let refreshedData = try? url.bookmarkData(options: []) {
                 restoredRecords.append(PersistedUpload(
                     name: record.name,
                     remotePath: record.remotePath,
@@ -460,7 +460,7 @@ final class AppModel: ObservableObject {
                   let transfer = transfers.first(where: { $0.id == id }) else { continue }
             switch transfer.state {
             case .queued, .paused, .transferring, .failed:
-                guard let bookmarkData = try? localURL.bookmarkData(options: [.withSecurityScope]) else { continue }
+                guard let bookmarkData = try? localURL.bookmarkData(options: []) else { continue }
                 records.append(PersistedUpload(
                     name: transfer.name,
                     remotePath: remotePath,
