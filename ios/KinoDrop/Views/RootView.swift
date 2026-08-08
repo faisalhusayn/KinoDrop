@@ -104,23 +104,24 @@ struct HomeView: View {
         NavigationStack {
             List {
                 Section {
-                    Label("Connected to \(model.config.host)", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                }
-
-                if let diagnostics = model.smbDiagnostics {
-                    Section("SMB diagnostics") {
-                        LabeledContent("Dialect", value: diagnostics.dialect)
-                        LabeledContent("Max write size", value: "\(diagnostics.maxWriteSize) bytes")
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("Connected", systemImage: "checkmark.circle.fill")
+                            .font(.headline)
+                            .foregroundStyle(.green)
+                        Text("\(model.config.host) / \(model.config.share)")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
+                    .padding(.vertical, 4)
                 }
 
-                Section("Send") {
+                Section {
                     PhotosPicker(
                         selection: $photoItems,
                         maxSelectionCount: 50,
                         matching: .any(of: [.images, .videos])) {
-                            Label("Send photos and videos", systemImage: "photo.on.rectangle.angled")
+                            Label("Photos and videos", systemImage: "photo.on.rectangle.angled")
                         }
                         .onChange(of: photoItems) { _, items in
                             Task {
@@ -132,23 +133,52 @@ struct HomeView: View {
                     Button {
                         showFilePicker = true
                     } label: {
-                        Label("Send files", systemImage: "doc.badge.plus")
+                        Label("Files", systemImage: "doc.badge.plus")
                     }
+                } header: {
+                    Text("Send to PC")
+                } footer: {
+                    Text("Files are sent one at a time so the connection stays predictable.")
                 }
 
-                Section("Transfers") {
+                Section {
                     if model.transfers.isEmpty {
-                        Text("No transfers yet")
+                        Label("Nothing transferred yet", systemImage: "tray")
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(model.transfers) { transfer in
-                            TransferRow(transfer: transfer)
+                            TransferRow(transfer: transfer, model: model)
                         }
+                        if model.transfers.contains(where: { transfer in
+                            switch transfer.state {
+                            case .completed, .cancelled: return true
+                            default: return false
+                            }
+                        }) {
+                            Button("Clear completed", role: .destructive) {
+                                model.clearFinishedTransfers()
+                            }
+                        }
+                    }
+                } header: {
+                    HStack {
+                        Text("Transfers")
+                        Spacer()
+                        Text("1 active at a time")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
                 Section("Browse") {
                     FileBrowserView(model: model)
+                }
+
+                if let diagnostics = model.smbDiagnostics {
+                    Section("Connection details") {
+                        LabeledContent("SMB dialect", value: diagnostics.dialect)
+                        LabeledContent("Max write", value: "\(diagnostics.maxWriteSize / 1_048_576) MB")
+                    }
                 }
 
                 Section {
@@ -188,11 +218,13 @@ struct ShareSheet: UIViewControllerRepresentable {
 
 struct TransferRow: View {
     let transfer: TransferItem
+    @ObservedObject var model: AppModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Image(systemName: transfer.direction == .upload ? "arrow.up.circle" : "arrow.down.circle")
+                Image(systemName: iconName)
+                    .foregroundStyle(iconColor)
                 Text(transfer.name)
                     .lineLimit(1)
                 Spacer()
@@ -203,16 +235,48 @@ struct TransferRow: View {
 
             if let progress = transfer.progress {
                 ProgressView(value: progress)
+                HStack {
+                    Text("\(Int(progress * 100))%")
+                    Spacer()
+                    if let total = transfer.totalBytes {
+                        Text("\(formatBytes(transfer.completedBytes)) of \(formatBytes(total))")
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             } else if case .transferring = transfer.state {
                 ProgressView()
             }
+
+            HStack {
+                if case .failed = transfer.state {
+                    Button("Retry") { model.retry(transfer) }
+                        .buttonStyle(.bordered)
+                }
+                if case .queued = transfer.state {
+                    Text("Waiting for the active transfer")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if case .paused = transfer.state {
+                    Text("Paused until KinoDrop is active")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if case .transferring = transfer.state {
+                    Button("Cancel", role: .destructive) { model.cancel(transfer) }
+                        .buttonStyle(.bordered)
+                }
+            }
         }
+        .padding(.vertical, 4)
     }
 
     private var stateText: String {
         switch transfer.state {
         case .queued: return "Queued"
-        case .transferring: return "Sending"
+        case .paused: return "Paused"
+        case .transferring: return transfer.direction == .upload ? "Uploading" : "Downloading"
         case .completed:
             if let duration = transfer.transferDuration {
                 return "Done · \(String(format: "%.1f", duration))s"
@@ -221,6 +285,18 @@ struct TransferRow: View {
         case .failed(let message): return message
         case .cancelled: return "Cancelled"
         }
+    }
+
+    private var iconName: String {
+        transfer.direction == .upload ? "arrow.up.circle.fill" : "arrow.down.circle.fill"
+    }
+
+    private var iconColor: Color {
+        transfer.direction == .upload ? .blue : .orange
+    }
+
+    private func formatBytes(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 }
 

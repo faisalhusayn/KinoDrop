@@ -8,6 +8,7 @@ struct TransferItem: Identifiable {
 
     enum State {
         case queued
+        case paused
         case transferring
         case completed
         case failed(String)
@@ -26,5 +27,10 @@ struct TransferItem: Identifiable {
     var progress: Double? {
         guard let totalBytes, totalBytes > 0 else { return nil }
         return min(Double(completedBytes) / Double(totalBytes), 1)
+    }
+
+    var isRetryable: Bool {
+        if case .failed = state { return true }
+        return false
     }
 }

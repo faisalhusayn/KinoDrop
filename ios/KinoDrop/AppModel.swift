@@ -1,6 +1,7 @@
 import Foundation
 import PhotosUI
 import SwiftUI
+import UIKit
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -34,6 +35,21 @@ final class AppModel: ObservableObject {
     private let keychain = KeychainStore()
     private var cleanupURLs: [UUID: URL] = [:]
     private var scopedURLs: [UUID: URL] = [:]
+    private enum TransferKind {
+        case upload(localURL: URL, remotePath: String)
+        case download(remotePath: String, localURL: URL)
+    }
+    private struct TransferJob {
+        let id: UUID
+        let kind: TransferKind
+    }
+    private var jobs: [UUID: TransferJob] = [:]
+    private var pendingJobs: [UUID] = []
+    private var activeTask: Task<Void, Never>?
+    private var activeTransferID: UUID?
+    private var pauseRequested = false
+    private var isInBackground = false
+    private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
 
     init() {
         config = keychain.load() ?? .default
@@ -58,10 +74,57 @@ final class AppModel: ObservableObject {
     }
 
     func disconnect() async {
+        pauseRequested = false
+        if let activeTransferID {
+            cleanupDownloadResource(for: activeTransferID)
+        }
+        activeTask?.cancel()
+        activeTask = nil
+        activeTransferID = nil
+        for id in pendingJobs {
+            updateTransfer(id) { $0.state = .cancelled }
+            cleanupUploadResources(for: id)
+            cleanupDownloadResource(for: id)
+        }
+        pendingJobs.removeAll()
         await smb.disconnect()
         smbDiagnostics = nil
         connectionState = .disconnected
         remoteFiles = []
+    }
+
+    func handleScenePhase(_ phase: ScenePhase) {
+        switch phase {
+        case .active:
+            isInBackground = false
+            pauseRequested = false
+            if backgroundTaskID != .invalid {
+                UIApplication.shared.endBackgroundTask(backgroundTaskID)
+                backgroundTaskID = .invalid
+            }
+            startNextTransfer()
+        case .background:
+            isInBackground = true
+            // Let the active transfer use iOS's temporary background execution window.
+            backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "KinoDrop transfer") { [weak self] in
+                Task { @MainActor in
+                    self?.backgroundTaskExpired()
+                }
+            }
+        case .inactive:
+            break
+        @unknown default:
+            break
+        }
+    }
+
+    private func backgroundTaskExpired() {
+        pauseRequested = true
+        activeTask?.cancel()
+        if backgroundTaskID != .invalid {
+            UIApplication.shared.endBackgroundTask(backgroundTaskID)
+            backgroundTaskID = .invalid
+        }
     }
 
     func applyScannedURL(_ url: URL) {
@@ -110,6 +173,7 @@ final class AppModel: ObservableObject {
         preparationDuration: TimeInterval? = nil,
         cleanup: Bool = false,
         alreadyScopedURL: URL? = nil) {
+        let remotePath = browsePath.isEmpty ? remoteName : "\(browsePath)/\(remoteName)"
         let transfer = TransferItem(
             name: remoteName,
             direction: .upload,
@@ -119,7 +183,9 @@ final class AppModel: ObservableObject {
         let id = transfer.id
         if cleanup { cleanupURLs[id] = localURL }
         if let alreadyScopedURL { scopedURLs[id] = alreadyScopedURL }
-        Task { await upload(url: localURL, transferID: id, name: remoteName) }
+        jobs[id] = TransferJob(id: id, kind: .upload(localURL: localURL, remotePath: remotePath))
+        pendingJobs.append(id)
+        startNextTransfer()
     }
 
     func importPhotos(_ items: [PhotosPickerItem]) async {
@@ -145,40 +211,85 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func upload(url: URL, transferID: UUID, name: String) async {
-        guard isConnected else {
-            updateTransfer(transferID) { $0.state = .failed("Not connected") }
-            cleanupUploadResources(for: transferID)
-            return
+    private func startNextTransfer() {
+        guard activeTask == nil, !pauseRequested, !isInBackground, isConnected, let id = pendingJobs.first,
+              let job = jobs[id] else { return }
+        pendingJobs.removeFirst()
+        activeTransferID = id
+        activeTask = Task { [weak self] in
+            await self?.perform(job)
         }
+    }
 
-        updateTransfer(transferID) { $0.state = .transferring }
-        let remotePath = browsePath.isEmpty ? name : "\(browsePath)/\(name)"
+    private func perform(_ job: TransferJob) async {
+        updateTransfer(job.id) { $0.state = .transferring }
         let progressThrottle = ProgressThrottle()
         let transferStart = Date()
 
         do {
-            try await smb.upload(localURL: url, remotePath: remotePath) { [weak self] progress in
-                guard progressThrottle.shouldEmit() else { return }
-                Task { @MainActor in
-                    self?.updateTransfer(transferID) {
-                        $0.completedBytes = progress.completed
-                        if let total = progress.total { $0.totalBytes = total }
-                    }
+            var attempt = 0
+            while true {
+                do {
+                    try await execute(job, progressThrottle: progressThrottle)
+                    if Task.isCancelled { throw CancellationError() }
+                    break
+                } catch {
+                    if Task.isCancelled { throw CancellationError() }
+                    guard attempt < 2 else { throw error }
+                    attempt += 1
+                    try await Task.sleep(nanoseconds: UInt64(attempt) * 500_000_000)
                 }
             }
-            updateTransfer(transferID) {
+            updateTransfer(job.id) {
                 $0.transferDuration = Date().timeIntervalSince(transferStart)
                 $0.state = .completed
             }
+            if case let .download(_, localURL) = job.kind { shareURL = localURL }
+            cleanupUploadResources(for: job.id)
         } catch {
-            updateTransfer(transferID) {
+            let wasPaused = pauseRequested
+            updateTransfer(job.id) {
                 $0.transferDuration = Date().timeIntervalSince(transferStart)
-                $0.state = .failed(error.localizedDescription)
+                $0.state = wasPaused ? .paused : (Task.isCancelled ? .cancelled : .failed(error.localizedDescription))
+            }
+            if wasPaused {
+                pendingJobs.insert(job.id, at: 0)
+            } else if Task.isCancelled {
+                cleanupUploadResources(for: job.id)
+                cleanupDownloadResource(for: job.id)
+            } else {
+                cleanupDownloadResource(for: job.id)
             }
         }
 
-        cleanupUploadResources(for: transferID)
+        activeTransferID = nil
+        activeTask = nil
+        startNextTransfer()
+    }
+
+    private func execute(_ job: TransferJob, progressThrottle: ProgressThrottle) async throws {
+        switch job.kind {
+        case let .upload(localURL, remotePath):
+            try await smb.upload(localURL: localURL, remotePath: remotePath) { [weak self] progress in
+                guard !Task.isCancelled else { return false }
+                if progressThrottle.shouldEmit() {
+                    Task { @MainActor [weak self] in
+                        self?.updateTransferProgress(job.id, progress: progress)
+                    }
+                }
+                return true
+            }
+        case let .download(remotePath, localURL):
+            try await smb.download(remotePath: remotePath, localURL: localURL) { [weak self] progress in
+                guard !Task.isCancelled else { return false }
+                if progressThrottle.shouldEmit() {
+                    Task { @MainActor [weak self] in
+                        self?.updateTransferProgress(job.id, progress: progress)
+                    }
+                }
+                return true
+            }
+        }
     }
 
     func download(_ file: RemoteFile) {
@@ -192,32 +303,62 @@ final class AppModel: ObservableObject {
             totalBytes: file.size)
         transfers.append(transfer)
         let id = transfer.id
-        let progressThrottle = ProgressThrottle()
+        jobs[id] = TransferJob(id: id, kind: .download(remotePath: file.path, localURL: destination))
+        pendingJobs.append(id)
+        startNextTransfer()
+    }
 
-        Task {
-            updateTransfer(id) { $0.state = .transferring }
-            do {
-                try await smb.download(remotePath: file.path, localURL: destination) { [weak self] progress in
-                    guard progressThrottle.shouldEmit() else { return }
-                    Task { @MainActor in
-                        self?.updateTransfer(id) {
-                            $0.completedBytes = progress.completed
-                            if let total = progress.total { $0.totalBytes = total }
-                        }
-                    }
-                }
-                updateTransfer(id) { $0.state = .completed }
-                shareURL = destination
-            } catch {
-                updateTransfer(id) { $0.state = .failed(error.localizedDescription) }
-                try? FileManager.default.removeItem(at: destination)
+    func cancel(_ transfer: TransferItem) {
+        guard let index = transfers.firstIndex(where: { $0.id == transfer.id }) else { return }
+        if activeTransferID == transfer.id {
+            activeTask?.cancel()
+        } else if let pendingIndex = pendingJobs.firstIndex(of: transfer.id) {
+            pendingJobs.remove(at: pendingIndex)
+            updateTransfer(transfer.id) { $0.state = .cancelled }
+            cleanupUploadResources(for: transfer.id)
+            cleanupDownloadResource(for: transfer.id)
+        } else if case .paused = transfers[index].state {
+            updateTransfer(transfer.id) { $0.state = .cancelled }
+            cleanupUploadResources(for: transfer.id)
+            cleanupDownloadResource(for: transfer.id)
+        }
+    }
+
+    func retry(_ transfer: TransferItem) {
+        guard transfer.isRetryable, jobs[transfer.id] != nil else { return }
+        updateTransfer(transfer.id) {
+            $0.state = .queued
+            $0.completedBytes = 0
+            $0.transferDuration = nil
+        }
+        pendingJobs.append(transfer.id)
+        startNextTransfer()
+    }
+
+    func clearFinishedTransfers() {
+        let removableIDs = transfers.compactMap { transfer -> UUID? in
+            switch transfer.state {
+            case .completed, .cancelled: return transfer.id
+            default: return nil
             }
+        }
+        transfers.removeAll { removableIDs.contains($0.id) }
+        for id in removableIDs {
+            jobs.removeValue(forKey: id)
+            cleanupUploadResources(for: id)
         }
     }
 
     private func updateTransfer(_ id: UUID, update: (inout TransferItem) -> Void) {
         guard let index = transfers.firstIndex(where: { $0.id == id }) else { return }
         update(&transfers[index])
+    }
+
+    private func updateTransferProgress(_ id: UUID, progress: SMBProgress) {
+        updateTransfer(id) {
+            $0.completedBytes = progress.completed
+            if let total = progress.total { $0.totalBytes = total }
+        }
     }
 
     private func fileSize(_ url: URL) -> Int64? {
@@ -229,6 +370,11 @@ final class AppModel: ObservableObject {
             try? FileManager.default.removeItem(at: cleanupURL)
         }
         scopedURLs.removeValue(forKey: transferID)?.stopAccessingSecurityScopedResource()
+    }
+
+    private func cleanupDownloadResource(for transferID: UUID) {
+        guard let job = jobs[transferID], case let .download(_, localURL) = job.kind else { return }
+        try? FileManager.default.removeItem(at: localURL)
     }
 }
 
