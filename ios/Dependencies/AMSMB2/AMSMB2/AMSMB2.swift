@@ -1334,19 +1334,18 @@ public class SMB2Manager: NSObject, NSSecureCoding, Codable, NSCopying, CustomRe
         completionHandler: SimpleCompletionHandler
     ) {
         with(completionHandler: completionHandler) { client in
-            guard try url.checkResourceIsReachable(), url.isFileURL,
-                  let stream = InputStream(url: url)
+            guard try url.checkResourceIsReachable(), url.isFileURL
             else {
                 throw POSIXError(
                     .ioError,
                     description:
-                    "Could not create Stream from given URL, or given URL is not a local file."
+                    "Could not open the given URL, or it is not a local file."
                 )
             }
 
             try self.writePipelined(
                 client: client,
-                from: stream,
+                sourceURL: url,
                 toPath: toPath,
                 chunkSize: chunkSize,
                 pipelineSize: pipelineSize,
@@ -1798,7 +1797,7 @@ extension SMB2Manager {
 
     private func writePipelined(
         client: SMB2Client,
-        from stream: InputStream,
+        sourceURL: URL,
         toPath: String,
         chunkSize: Int,
         pipelineSize: Int,
@@ -1809,25 +1808,25 @@ extension SMB2Manager {
         let chunkSize = chunkSize > 0 ? chunkSize : (negotiatedSize > 0 ? negotiatedSize : 1_048_576)
         let pipelineSize = max(1, min(pipelineSize, 8))
         var nextOffset: UInt64 = 0
+        let source = try FileHandle(forReadingFrom: sourceURL)
 
-        try stream.withOpenStream {
-            while true {
-                var window: [(offset: UInt64, data: Data)] = []
-                window.reserveCapacity(pipelineSize)
+        defer { try? source.close() }
+        while true {
+            var window: [(offset: UInt64, data: Data)] = []
+            window.reserveCapacity(pipelineSize)
 
-                while window.count < pipelineSize {
-                    let segment = try stream.readData(maxLength: chunkSize)
-                    if segment.isEmpty { break }
-                    window.append((offset: nextOffset, data: segment))
-                    nextOffset += UInt64(segment.count)
-                }
+            while window.count < pipelineSize {
+                let segment = try source.read(upToCount: chunkSize) ?? Data()
+                if segment.isEmpty { break }
+                window.append((offset: nextOffset, data: segment))
+                nextOffset += UInt64(segment.count)
+            }
 
-                if window.isEmpty { break }
-                try file.writeWindow(chunks: window)
+            if window.isEmpty { break }
+            try file.writeWindow(chunks: window)
 
-                if let shouldContinue = progress?(Int64(nextOffset)), !shouldContinue {
-                    break
-                }
+            if let shouldContinue = progress?(Int64(nextOffset)), !shouldContinue {
+                break
             }
         }
 
