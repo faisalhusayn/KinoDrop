@@ -375,7 +375,7 @@ final class SMB2FileHandle: @unchecked Sendable {
                     )
                 }
                 if result < 0 {
-                    throw POSIXError(errno, description: client.errorString)
+                    throw POSIXError(Errno(rawValue: -result), description: client.errorString)
                 }
             }
             try client.serviceUntil(cbs)
