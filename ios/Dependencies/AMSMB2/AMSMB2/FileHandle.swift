@@ -408,7 +408,7 @@ final class SMB2FileHandle: @unchecked Sendable {
         progress: ((Int64) -> Bool)?
     ) throws {
         let handle = try handle.unwrap()
-        let pipelineSize = max(1, min(pipelineSize, 8))
+        let pipelineSize = max(1, min(pipelineSize, 16))
 
         try client.withThreadSafeContext { context in
             var callbacks = (0..<pipelineSize).map { _ in SMB2Client.CBData() }

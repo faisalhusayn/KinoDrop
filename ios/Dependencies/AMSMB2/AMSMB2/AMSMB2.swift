@@ -34,6 +34,17 @@ public class SMB2Manager: NSObject, NSSecureCoding, Codable, NSCopying, CustomRe
     /// SMB2 Share URL.
     public let url: URL
 
+    /// The dialect selected during SMB negotiation, for diagnostics.
+    open var negotiatedDialect: String {
+        client?.version.description ?? "Unknown"
+    }
+
+    /// The server's negotiated maximum write size, for diagnostics.
+    open var negotiatedMaxWriteSize: Int {
+        guard let client else { return -1 }
+        return (try? Int(client.withThreadSafeContext(smb2_get_max_write_size))) ?? -1
+    }
+
     fileprivate let _domain: String
     fileprivate var _workstation: String
     fileprivate let _user: String

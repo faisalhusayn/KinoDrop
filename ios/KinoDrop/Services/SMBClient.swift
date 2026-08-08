@@ -1,5 +1,6 @@
 import AMSMB2
 import Foundation
+import os
 
 struct SMBProgress {
     let completed: Int64
@@ -8,6 +9,7 @@ struct SMBProgress {
 
 final class SMBClient {
     private var manager: SMB2Manager?
+    private let logger = Logger(subsystem: "com.faisalhusayn.kinodrop", category: "SMB")
 
     var isConnected: Bool { manager != nil }
 
@@ -27,6 +29,9 @@ final class SMBClient {
 
         try await manager.connectShare(name: config.share)
         self.manager = manager
+        logger.info(
+            "Connected with SMB dialect \(manager.negotiatedDialect, privacy: .public), max write size \(manager.negotiatedMaxWriteSize, privacy: .public) bytes"
+        )
     }
 
     func disconnect() async {
@@ -67,7 +72,7 @@ final class SMBClient {
         try await manager.uploadItemPipelined(
             at: localURL,
             toPath: remotePath,
-            pipelineSize: 8
+            pipelineSize: 16
         ) { completed in
             progress(SMBProgress(completed: completed, total: nil))
             return true
