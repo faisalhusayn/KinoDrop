@@ -56,8 +56,15 @@ jobs:
       - name: Package IPA
         working-directory: ios
         run: |
+          APP_PATH="build/Build/Products/Release-iphoneos/KinoDrop.app"
+          PACKAGE_FRAMEWORK="build/Build/Products/Release-iphoneos/PackageFrameworks/AMSMB2.framework"
+          if [ -d "$PACKAGE_FRAMEWORK" ] && [ ! -d "$APP_PATH/Frameworks/AMSMB2.framework" ]; then
+            mkdir -p "$APP_PATH/Frameworks"
+            cp -R "$PACKAGE_FRAMEWORK" "$APP_PATH/Frameworks/"
+          fi
+          test -d "$APP_PATH/Frameworks/AMSMB2.framework"
           mkdir -p Payload
-          cp -R build/Build/Products/Release-iphoneos/KinoDrop.app Payload/
+          cp -R "$APP_PATH" Payload/
           zip -r KinoDrop.ipa Payload
 
       - name: Upload IPA artifact
