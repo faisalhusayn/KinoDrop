@@ -1,4 +1,5 @@
 import Foundation
+import Photos
 import PhotosUI
 import SwiftUI
 
@@ -96,37 +97,41 @@ final class AppModel: ObservableObject {
 
     func enqueueUploads(urls: [URL]) {
         for url in urls {
-            let name = url.lastPathComponent
-            let transfer = TransferItem(name: name, direction: .upload, totalBytes: fileSize(url))
-            transfers.append(transfer)
-            let id = transfers[transfers.count - 1].id
-            cleanupURLs[id] = url
-            Task { await upload(url: url, transferID: id, name: name) }
+            enqueueUpload(localURL: url, remoteName: url.lastPathComponent)
         }
     }
 
+    private func enqueueUpload(localURL: URL, remoteName: String) {
+        let transfer = TransferItem(
+            name: remoteName,
+            direction: .upload,
+            totalBytes: fileSize(localURL))
+        transfers.append(transfer)
+        let id = transfer.id
+        cleanupURLs[id] = localURL
+        Task { await upload(url: localURL, transferID: id, name: remoteName) }
+    }
+
     func importPhotos(_ items: [PhotosPickerItem]) async {
-        var urls: [URL] = []
         for item in items {
             guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
             let extensionName = item.supportedContentTypes.first?.preferredFilenameExtension ?? "bin"
+            let originalName = photoFilename(for: item)
+                ?? "IMG_\(UUID().uuidString).\(extensionName)"
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent(UUID().uuidString)
                 .appendingPathExtension(extensionName)
 
             do {
                 try data.write(to: url, options: .atomic)
-                urls.append(url)
+                enqueueUpload(localURL: url, remoteName: originalName)
             } catch {
                 errorMessage = "Could not prepare a selected photo: \(error.localizedDescription)"
             }
         }
-
-        enqueueUploads(urls: urls)
     }
 
     func importFiles(_ urls: [URL]) async {
-        var localURLs: [URL] = []
         for url in urls {
             let accessed = url.startAccessingSecurityScopedResource()
             defer {
@@ -139,13 +144,21 @@ final class AppModel: ObservableObject {
 
             do {
                 try FileManager.default.copyItem(at: url, to: destination)
-                localURLs.append(destination)
+                enqueueUpload(localURL: destination, remoteName: url.lastPathComponent)
             } catch {
                 errorMessage = "Could not prepare \(url.lastPathComponent): \(error.localizedDescription)"
             }
         }
+    }
 
-        enqueueUploads(urls: localURLs)
+    private func photoFilename(for item: PhotosPickerItem) -> String? {
+        guard let identifier = item.itemIdentifier,
+              let asset = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil).firstObject,
+              let resource = PHAssetResource.assetResources(for: asset).first else {
+            return nil
+        }
+
+        return resource.originalFilename
     }
 
     private func upload(url: URL, transferID: UUID, name: String) async {
