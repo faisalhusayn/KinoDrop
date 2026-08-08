@@ -3,6 +3,12 @@ import PhotosUI
 import SwiftUI
 import UIKit
 
+private struct PersistedUpload: Codable {
+    let name: String
+    let remotePath: String
+    let bookmarkData: Data
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     enum ConnectionState: Equatable {
@@ -50,9 +56,11 @@ final class AppModel: ObservableObject {
     private var pauseRequested = false
     private var isInBackground = false
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+    private let persistedQueueKey = "pendingUploadQueue"
 
     init() {
         config = keychain.load() ?? .default
+        restorePersistedUploads()
     }
 
     var isConnected: Bool { connectionState == .connected }
@@ -67,6 +75,7 @@ final class AppModel: ObservableObject {
             smbDiagnostics = smb.diagnostics
             connectionState = .connected
             await refreshFiles()
+            startNextTransfer()
         } catch {
             connectionState = .failed(error.localizedDescription)
             errorMessage = error.localizedDescription
@@ -76,7 +85,9 @@ final class AppModel: ObservableObject {
     func disconnect() async {
         pauseRequested = false
         if let activeTransferID {
+            updateTransfer(activeTransferID) { $0.state = .cancelled }
             cleanupDownloadResource(for: activeTransferID)
+            cleanupUploadResources(for: activeTransferID)
         }
         activeTask?.cancel()
         activeTask = nil
@@ -91,6 +102,7 @@ final class AppModel: ObservableObject {
         smbDiagnostics = nil
         connectionState = .disconnected
         remoteFiles = []
+        persistQueue()
     }
 
     func handleScenePhase(_ phase: ScenePhase) {
@@ -185,6 +197,7 @@ final class AppModel: ObservableObject {
         if let alreadyScopedURL { scopedURLs[id] = alreadyScopedURL }
         jobs[id] = TransferJob(id: id, kind: .upload(localURL: localURL, remotePath: remotePath))
         pendingJobs.append(id)
+        persistQueue()
         startNextTransfer()
     }
 
@@ -264,6 +277,7 @@ final class AppModel: ObservableObject {
 
         activeTransferID = nil
         activeTask = nil
+        persistQueue()
         startNextTransfer()
     }
 
@@ -311,16 +325,22 @@ final class AppModel: ObservableObject {
     func cancel(_ transfer: TransferItem) {
         guard let index = transfers.firstIndex(where: { $0.id == transfer.id }) else { return }
         if activeTransferID == transfer.id {
+            updateTransfer(transfer.id) { $0.state = .cancelled }
             activeTask?.cancel()
+            cleanupUploadResources(for: transfer.id)
+            cleanupDownloadResource(for: transfer.id)
+            persistQueue()
         } else if let pendingIndex = pendingJobs.firstIndex(of: transfer.id) {
             pendingJobs.remove(at: pendingIndex)
             updateTransfer(transfer.id) { $0.state = .cancelled }
             cleanupUploadResources(for: transfer.id)
             cleanupDownloadResource(for: transfer.id)
+            persistQueue()
         } else if case .paused = transfers[index].state {
             updateTransfer(transfer.id) { $0.state = .cancelled }
             cleanupUploadResources(for: transfer.id)
             cleanupDownloadResource(for: transfer.id)
+            persistQueue()
         }
     }
 
@@ -332,6 +352,7 @@ final class AppModel: ObservableObject {
             $0.transferDuration = nil
         }
         pendingJobs.append(transfer.id)
+        persistQueue()
         startNextTransfer()
     }
 
@@ -347,6 +368,7 @@ final class AppModel: ObservableObject {
             jobs.removeValue(forKey: id)
             cleanupUploadResources(for: id)
         }
+        persistQueue()
     }
 
     private func updateTransfer(_ id: UUID, update: (inout TransferItem) -> Void) {
@@ -375,6 +397,91 @@ final class AppModel: ObservableObject {
     private func cleanupDownloadResource(for transferID: UUID) {
         guard let job = jobs[transferID], case let .download(_, localURL) = job.kind else { return }
         try? FileManager.default.removeItem(at: localURL)
+    }
+
+    private func restorePersistedUploads() {
+        guard let data = UserDefaults.standard.data(forKey: persistedQueueKey),
+              let records = try? JSONDecoder().decode([PersistedUpload].self, from: data) else {
+            return
+        }
+
+        var restoredRecords: [PersistedUpload] = []
+        for record in records {
+            var isStale = false
+            guard let url = try? URL(
+                resolvingBookmarkData: record.bookmarkData,
+                options: [.withSecurityScope, .withoutUI],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale),
+                url.isFileURL,
+                FileManager.default.fileExists(atPath: url.path) else {
+                continue
+            }
+
+            let transfer = TransferItem(
+                name: record.name,
+                direction: .upload,
+                totalBytes: fileSize(url))
+            transfers.append(transfer)
+            jobs[transfer.id] = TransferJob(
+                id: transfer.id,
+                kind: .upload(localURL: url, remotePath: record.remotePath))
+            pendingJobs.append(transfer.id)
+            if url.startAccessingSecurityScopedResource() {
+                scopedURLs[transfer.id] = url
+            }
+            if isStale, let refreshedData = try? url.bookmarkData(options: [.withSecurityScope]) {
+                restoredRecords.append(PersistedUpload(
+                    name: record.name,
+                    remotePath: record.remotePath,
+                    bookmarkData: refreshedData))
+            } else {
+                restoredRecords.append(record)
+            }
+        }
+
+        if restoredRecords.isEmpty {
+            UserDefaults.standard.removeObject(forKey: persistedQueueKey)
+        } else if let data = try? JSONEncoder().encode(restoredRecords) {
+            UserDefaults.standard.set(data, forKey: persistedQueueKey)
+        }
+    }
+
+    private func persistQueue() {
+        var ids = pendingJobs
+        if let activeTransferID { ids.append(activeTransferID) }
+        ids.append(contentsOf: transfers.compactMap { transfer in
+            transfer.isRetryable ? transfer.id : nil
+        })
+
+        var records: [PersistedUpload] = []
+        for id in ids.uniqued() {
+            guard let job = jobs[id], case let .upload(localURL, remotePath) = job.kind,
+                  let transfer = transfers.first(where: { $0.id == id }) else { continue }
+            switch transfer.state {
+            case .queued, .paused, .transferring, .failed:
+                guard let bookmarkData = try? localURL.bookmarkData(options: [.withSecurityScope]) else { continue }
+                records.append(PersistedUpload(
+                    name: transfer.name,
+                    remotePath: remotePath,
+                    bookmarkData: bookmarkData))
+            case .completed, .cancelled:
+                continue
+            }
+        }
+
+        guard !records.isEmpty, let data = try? JSONEncoder().encode(records) else {
+            UserDefaults.standard.removeObject(forKey: persistedQueueKey)
+            return
+        }
+        UserDefaults.standard.set(data, forKey: persistedQueueKey)
+    }
+}
+
+private extension Array where Element: Hashable {
+    func uniqued() -> [Element] {
+        var seen = Set<Element>()
+        return filter { seen.insert($0).inserted }
     }
 }
 

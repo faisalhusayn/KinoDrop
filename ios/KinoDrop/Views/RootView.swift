@@ -138,7 +138,7 @@ struct HomeView: View {
                 } header: {
                     Text("Send to PC")
                 } footer: {
-                    Text("Files are sent one at a time so the connection stays predictable.")
+                    Text("Files are sent one at a time so the connection stays predictable. Keep KinoDrop open for maximum speed; iOS may reduce transfer speed when the app is in the background.")
                 }
 
                 Section {
