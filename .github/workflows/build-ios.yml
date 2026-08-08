@@ -23,6 +23,7 @@ jobs:
       - name: Build unsigned app
         working-directory: ios
         run: |
+          set -o pipefail
           xcodebuild \
             -project KinoDrop.xcodeproj \
             -scheme KinoDrop \
@@ -32,7 +33,14 @@ jobs:
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            build
+            build 2>&1 | tee xcodebuild.log
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: KinoDrop-xcodebuild-log
+          path: ios/xcodebuild.log
 
       - name: Package IPA
         working-directory: ios
