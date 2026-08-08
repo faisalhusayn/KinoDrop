@@ -1807,28 +1807,15 @@ extension SMB2Manager {
         let negotiatedSize = file.optimizedWriteSize
         let chunkSize = chunkSize > 0 ? chunkSize : (negotiatedSize > 0 ? negotiatedSize : 1_048_576)
         let pipelineSize = max(1, min(pipelineSize, 8))
-        var nextOffset: UInt64 = 0
         let source = try FileHandle(forReadingFrom: sourceURL)
 
         defer { try? source.close() }
-        while true {
-            var window: [(offset: UInt64, data: Data)] = []
-            window.reserveCapacity(pipelineSize)
-
-            while window.count < pipelineSize {
-                let segment = try source.read(upToCount: chunkSize) ?? Data()
-                if segment.isEmpty { break }
-                window.append((offset: nextOffset, data: segment))
-                nextOffset += UInt64(segment.count)
-            }
-
-            if window.isEmpty { break }
-            try file.writeWindow(chunks: window)
-
-            if let shouldContinue = progress?(Int64(nextOffset)), !shouldContinue {
-                break
-            }
-        }
+        try file.writePipeline(
+            source: source,
+            chunkSize: chunkSize,
+            pipelineSize: pipelineSize,
+            progress: progress
+        )
 
         try file.fsync()
     }

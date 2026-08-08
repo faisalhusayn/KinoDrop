@@ -400,6 +400,98 @@ final class SMB2FileHandle: @unchecked Sendable {
         }
     }
 
+    /// Maintains a rolling set of positional writes, replacing each completed request immediately.
+    func writePipeline(
+        source: FileHandle,
+        chunkSize: Int,
+        pipelineSize: Int,
+        progress: ((Int64) -> Bool)?
+    ) throws {
+        let handle = try handle.unwrap()
+        let pipelineSize = max(1, min(pipelineSize, 8))
+
+        try client.withThreadSafeContext { context in
+            var callbacks = (0..<pipelineSize).map { _ in SMB2Client.CBData() }
+            var dataSlots = (0..<pipelineSize).map { _ in Data() }
+            var offsets = [UInt64](repeating: 0, count: pipelineSize)
+            var active: [Int] = []
+            var nextOffset: UInt64 = 0
+            var completedBytes: Int64 = 0
+            var sourceExhausted = false
+
+            func readNextChunk() throws -> Data {
+                try source.read(upToCount: chunkSize) ?? Data()
+            }
+
+            try callbacks.withUnsafeMutableBufferPointer { callbackBuffer in
+                func submit(_ index: Int) throws {
+                    callbackBuffer[index].result = .init(NTStatus.success.rawValue)
+                    callbackBuffer[index].isFinished = false
+                    let result = dataSlots[index].withUnsafeBytes { buffer -> Int32 in
+                        smb2_pwrite_async(
+                            context,
+                            handle,
+                            buffer.baseAddress,
+                            .init(buffer.count),
+                            offsets[index],
+                            SMB2Client.generic_handler,
+                            &callbackBuffer[index]
+                        )
+                    }
+                    if result < 0 {
+                        throw POSIXError(Errno(rawValue: -result), description: client.errorString)
+                    }
+                    active.append(index)
+                }
+
+                do {
+                    for index in 0..<pipelineSize {
+                        let data = try readNextChunk()
+                        if data.isEmpty {
+                            sourceExhausted = true
+                            break
+                        }
+                        dataSlots[index] = data
+                        offsets[index] = nextOffset
+                        nextOffset += UInt64(data.count)
+                        try submit(index)
+                    }
+
+                    while !active.isEmpty {
+                        let completed = try client.serviceUntilAny(
+                            Array(callbackBuffer), active: active
+                        )
+                        for index in completed {
+                            active.removeAll { $0 == index }
+                            completedBytes += Int64(dataSlots[index].count)
+
+                            if !sourceExhausted {
+                                let data = try readNextChunk()
+                                if data.isEmpty {
+                                    sourceExhausted = true
+                                } else {
+                                    dataSlots[index] = data
+                                    offsets[index] = nextOffset
+                                    nextOffset += UInt64(data.count)
+                                    try submit(index)
+                                }
+                            }
+                        }
+
+                        if let progress, !progress(completedBytes) {
+                            sourceExhausted = true
+                        }
+                    }
+                } catch {
+                    if !active.isEmpty {
+                        try? client.serviceUntil(active.map { callbackBuffer[$0] })
+                    }
+                    throw error
+                }
+            }
+        }
+    }
+
     func fsync() throws {
         let handle = try handle.unwrap()
         try client.async_await { context, cbPtr -> Int32 in

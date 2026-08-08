@@ -414,6 +414,34 @@ extension SMB2Client {
             try POSIXError.throwIfError(callback.result, description: errorString)
         }
     }
+
+    func serviceUntilAny(_ callbacks: [CBData], active: [Int]) throws -> [Int] {
+        let startDate = Date()
+        while true {
+            var pfd = pollfd()
+            pfd.fd = fileDescriptor.rawValue
+            pfd.events = try whichEvents()
+            if pfd.fd < 0 || (poll(&pfd, 1, 1000) < 0 && errno != .resourceTemporarilyUnavailable) {
+                throw POSIXError(errno, description: errorString)
+            }
+
+            if pfd.revents == 0 {
+                if timeout > 0, Date().timeIntervalSince(startDate) > timeout {
+                    throw POSIXError(.timedOut, description: nil)
+                }
+                continue
+            }
+
+            try service(revents: Int32(pfd.revents))
+            let completed = active.filter { callbacks[$0].isFinished }
+            if !completed.isEmpty {
+                for index in completed {
+                    try POSIXError.throwIfError(callbacks[index].result, description: errorString)
+                }
+                return completed
+            }
+        }
+    }
     
     private class AsyncCallbackData<T> {
         var continuation: CheckedContinuation<T, any Error>
