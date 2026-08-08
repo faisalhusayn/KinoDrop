@@ -9,8 +9,7 @@ options:
 
 packages:
   AMSMB2:
-    url: https://github.com/amosavian/AMSMB2.git
-    from: 4.0.0
+    path: Dependencies/AMSMB2
 
 targets:
   KinoDrop:
