@@ -145,8 +145,7 @@ final class AppModel: ObservableObject {
     private func upload(url: URL, transferID: UUID, name: String) async {
         guard isConnected else {
             updateTransfer(transferID) { $0.state = .failed("Not connected") }
-            scopedURLs.removeValue(forKey: transferID)?.stopAccessingSecurityScopedResource()
-            try? FileManager.default.removeItem(at: cleanupURLs.removeValue(forKey: transferID) ?? url)
+            cleanupUploadResources(for: transferID)
             return
         }
 
@@ -176,8 +175,7 @@ final class AppModel: ObservableObject {
             }
         }
 
-        try? FileManager.default.removeItem(at: cleanupURLs.removeValue(forKey: transferID) ?? url)
-        scopedURLs.removeValue(forKey: transferID)?.stopAccessingSecurityScopedResource()
+        cleanupUploadResources(for: transferID)
     }
 
     func download(_ file: RemoteFile) {
@@ -221,6 +219,13 @@ final class AppModel: ObservableObject {
 
     private func fileSize(_ url: URL) -> Int64? {
         (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
+    }
+
+    private func cleanupUploadResources(for transferID: UUID) {
+        if let cleanupURL = cleanupURLs.removeValue(forKey: transferID) {
+            try? FileManager.default.removeItem(at: cleanupURL)
+        }
+        scopedURLs.removeValue(forKey: transferID)?.stopAccessingSecurityScopedResource()
     }
 }
 
