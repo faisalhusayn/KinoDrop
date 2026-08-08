@@ -89,6 +89,10 @@ final class SMB2FileHandle: @unchecked Sendable {
         try self.init(path, .writeOnly, options: [.truncate], on: client)
     }
 
+    convenience init(forOverwritingIfExistsAtPath path: String, on client: SMB2Client) throws {
+        try self.init(path, .writeOnly, options: [.create, .truncate], on: client)
+    }
+
     convenience init(forOutputAtPath path: String, on client: SMB2Client) throws {
         try self.init(path, .writeOnly, options: [.create], on: client)
     }
@@ -360,7 +364,7 @@ final class SMB2FileHandle: @unchecked Sendable {
             var callbacks = chunks.map { _ in SMB2Client.CBData() }
             var submitted = 0
 
-            var enqueueError: Error?
+            var enqueueError: (any Error)?
             callbacks.withUnsafeMutableBufferPointer { callbackBuffer in
                 for (index, chunk) in chunks.enumerated() {
                     let result = chunk.data.withUnsafeBytes { buffer -> Int32 in
