@@ -2,7 +2,7 @@
 
 KinoDrop is a Windows desktop app for transferring files between a Windows PC and an iPhone over the local network.
 
-It uses Windows' built-in SMB server. The iPhone can connect through the Files app, or later through the planned KinoDrop iOS companion app.
+It uses Windows' built-in SMB server. The iPhone can connect through the Files app or the companion iOS app in `ios/`.
 
 ## Features
 
@@ -78,3 +78,4 @@ This location is intentionally preserved across application upgrades.
 - `src/KinoShare.Infrastructure` - Windows SMB, firewall, account, and storage services
 - `tests/KinoShare.Tests` - unit tests
 - `installer` - Inno Setup installer definition
+- `ios` - SwiftUI iPhone companion app and GitHub Actions build configuration

@@ -9,3 +9,12 @@ artifacts/*.exe
 artifacts/*.zip
 artifacts/publish/*
 !artifacts/publish/create-shortcut.ps1
+
+# iOS generated files
+**/.build/
+**/DerivedData/
+**/xcuserdata/
+**/*.xcuserstate
+**/.swiftpm/
+**/*.xcodeproj
+**/*.ipa
