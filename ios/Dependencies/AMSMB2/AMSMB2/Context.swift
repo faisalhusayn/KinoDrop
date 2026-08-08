@@ -380,16 +380,16 @@ extension SMB2Client {
 
 // MARK: Async operation handler
 
-final class CBData {
-    var result: Int32 = .init(NTStatus.success.rawValue)
-    var isFinished: Bool = false
-    var dataHandler: ((UnsafeMutableRawPointer?) -> Void)?
-    var status: NTStatus {
-        NTStatus(rawValue: result)
-    }
-}
-
 extension SMB2Client {
+    class CBData {
+        var result: Int32 = .init(NTStatus.success.rawValue)
+        var isFinished: Bool = false
+        var dataHandler: ((UnsafeMutableRawPointer?) -> Void)?
+        var status: NTStatus {
+            NTStatus(rawValue: result)
+        }
+    }
+    
     private class AsyncCallbackData<T> {
         var continuation: CheckedContinuation<T, any Error>
         
