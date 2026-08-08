@@ -42,6 +42,17 @@ jobs:
           name: KinoDrop-xcodebuild-log
           path: ios/xcodebuild.log
 
+      - name: Publish compiler diagnostics
+        if: failure()
+        working-directory: ios
+        run: |
+          if [ -f xcodebuild.log ]; then
+            echo "### xcodebuild diagnostics" >> "$GITHUB_STEP_SUMMARY"
+            tail -n 100 xcodebuild.log >> "$GITHUB_STEP_SUMMARY"
+            diagnostic=$(tail -n 20 xcodebuild.log | tr '\n' ' ' | cut -c1-4000)
+            echo "::error file=ios/xcodebuild.log::$diagnostic"
+          fi
+
       - name: Package IPA
         working-directory: ios
         run: |
