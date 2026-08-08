@@ -1,0 +1,11 @@
+.vs/
+.vscode/
+**/bin/
+**/obj/
+*.user
+*.suo
+
+artifacts/*.exe
+artifacts/*.zip
+artifacts/publish/*
+!artifacts/publish/create-shortcut.ps1
