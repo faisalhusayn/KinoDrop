@@ -34,6 +34,16 @@ struct ConnectView: View {
         NavigationStack {
             Form {
                 Section {
+                    Image("KinoDropLogo")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 150)
+                        .clipShape(RoundedRectangle(cornerRadius: 18))
+                        .accessibilityLabel("KinoDrop logo")
+                }
+
+                Section {
                     Text("Connect to the KinoDrop share running on your Windows PC.")
                         .foregroundStyle(.secondary)
 
