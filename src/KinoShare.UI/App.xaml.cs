@@ -20,6 +20,7 @@ using Microsoft.UI.Xaml;
 public partial class App : Application
 {
     private readonly ServiceProvider _services;
+    private MainWindow? _window;
 
     public App()
     {
@@ -55,7 +56,7 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
-        var window = new MainWindow();
-        window.Activate();
+        _window = new MainWindow();
+        _window.Activate();
     }
 }

@@ -31,6 +31,8 @@ public sealed partial class MainWindow : Window
 
         InitializeComponent();
 
+        Closed += OnClosed;
+
         ConfigureWindow();
 
         _copyResetTimer = DispatcherQueue.CreateTimer();
@@ -46,6 +48,14 @@ public sealed partial class MainWindow : Window
 
     /// <summary>Gets the window's view model.</summary>
     public ShareSessionViewModel ViewModel { get; }
+
+    private async void OnClosed(object sender, WindowEventArgs args)
+    {
+        if (ViewModel.IsRunning)
+        {
+            await ViewModel.StopSessionAsync();
+        }
+    }
 
     private void ConfigureWindow()
     {

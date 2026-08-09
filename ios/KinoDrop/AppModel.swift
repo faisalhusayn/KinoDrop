@@ -111,9 +111,19 @@ final class AppModel: ObservableObject {
         requestNotificationPermission()
         nearbyBrowser.onChange = { [weak self] devices in self?.nearbyDevices = devices }
         nearbyBrowser.start()
+        Task { @MainActor [weak self] in
+            await self?.autoReconnectSavedConnection()
+        }
     }
 
     var isConnected: Bool { connectionState == .connected }
+
+    private func autoReconnectSavedConnection() async {
+        guard !config.host.isEmpty, !config.password.isEmpty else { return }
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        guard connectionState == .disconnected else { return }
+        await connect()
+    }
 
     func connect() async {
         errorMessage = nil
