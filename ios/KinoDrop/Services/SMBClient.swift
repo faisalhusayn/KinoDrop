@@ -113,9 +113,10 @@ final class SMBClient {
     func download(
         remotePath: String,
         localURL: URL,
+        offset: Int64 = 0,
         progress: @escaping @Sendable (SMBProgress) -> Bool) async throws {
         guard let manager else { throw SMBClientError.notConnected }
-        try await manager.downloadItem(atPath: remotePath, to: localURL) { completed, total in
+        try await manager.downloadItem(atPath: remotePath, to: localURL, offset: offset) { completed, total in
             return progress(SMBProgress(completed: completed, total: total))
         }
     }

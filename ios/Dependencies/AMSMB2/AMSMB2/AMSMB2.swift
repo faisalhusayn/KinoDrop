@@ -1403,18 +1403,18 @@ public class SMB2Manager: NSObject, NSSecureCoding, Codable, NSCopying, CustomRe
        - completionHandler: closure will be run after uploading is completed.
      */
     open func downloadItem(
-        atPath path: String, to url: URL, progress: ReadProgressHandler,
+        atPath path: String, to url: URL, offset: Int64 = 0, progress: ReadProgressHandler,
         completionHandler: SimpleCompletionHandler
     ) {
         with(completionHandler: completionHandler) { client in
-            guard url.isFileURL, let stream = OutputStream(url: url, append: false) else {
+            guard url.isFileURL, let stream = OutputStream(url: url, append: offset > 0) else {
                 throw POSIXError(
                     .ioError,
                     description:
                     "Could not create Stream from given URL, or given URL is not a local file."
                 )
             }
-            try self.read(client: client, path: path, to: stream, progress: progress)
+            try self.read(client: client, path: path, range: offset..<Int64.max, to: stream, progress: progress)
         }
     }
 
@@ -1432,11 +1432,11 @@ public class SMB2Manager: NSObject, NSSecureCoding, Codable, NSCopying, CustomRe
            User must return `true` if they want to continuing or `false` to abort copying.
      */
     open func downloadItem(
-        atPath path: String, to url: URL, progress: ReadProgressHandler
+        atPath path: String, to url: URL, offset: Int64 = 0, progress: ReadProgressHandler
     ) async throws {
         try await withCheckedThrowingContinuation { continuation in
             downloadItem(
-                atPath: path, to: url, progress: progress,
+                atPath: path, to: url, offset: offset, progress: progress,
                 completionHandler: asyncHandler(continuation)
             )
         }
@@ -1763,7 +1763,7 @@ extension SMB2Manager {
                     )
                 }
                 sent += Int64(written)
-                shouldContinue = progress?(sent, size) ?? true
+                shouldContinue = progress?(range.lowerBound + sent, filesize) ?? true
             }
         }
     }

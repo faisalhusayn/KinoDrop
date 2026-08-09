@@ -45,7 +45,7 @@ final class AppModel: ObservableObject {
     private var scopedURLs: [UUID: URL] = [:]
     private enum TransferKind {
         case upload(localURL: URL, remotePath: String, partialRemotePath: String)
-        case download(remotePath: String, localURL: URL)
+        case download(remotePath: String, partialURL: URL, finalURL: URL)
     }
     private struct TransferJob {
         let id: UUID
@@ -269,7 +269,11 @@ final class AppModel: ObservableObject {
                 $0.transferDuration = Date().timeIntervalSince(transferStart)
                 $0.state = .completed
             }
-            if case let .download(_, localURL) = job.kind { shareURL = localURL }
+            if case let .download(_, partialURL, finalURL) = job.kind {
+                try? FileManager.default.removeItem(at: finalURL)
+                try? FileManager.default.moveItem(at: partialURL, to: finalURL)
+                shareURL = finalURL
+            }
             cleanupUploadResources(for: job.id)
             await endLiveActivity(phase: "Completed", transferID: job.id)
         } catch {
@@ -325,8 +329,17 @@ final class AppModel: ObservableObject {
             }
             try? await smb.remove(remotePath: remotePath)
             try await smb.move(remotePath: partialRemotePath, to: remotePath)
-        case let .download(remotePath, localURL):
-            try await smb.download(remotePath: remotePath, localURL: localURL) { [weak self] progress in
+        case let .download(remotePath, partialURL, _):
+            let partialSize = fileSize(partialURL) ?? 0
+            let offset: Int64
+            if let expectedSize = transfers.first(where: { $0.id == job.id })?.totalBytes,
+               partialSize > expectedSize {
+                try? FileManager.default.removeItem(at: partialURL)
+                offset = 0
+            } else {
+                offset = partialSize
+            }
+            try await smb.download(remotePath: remotePath, localURL: partialURL, offset: offset) { [weak self] progress in
                 guard !Task.isCancelled else { return false }
                 if progressThrottle.shouldEmit() {
                     Task { @MainActor [weak self] in
@@ -339,17 +352,21 @@ final class AppModel: ObservableObject {
     }
 
     func download(_ file: RemoteFile) {
-        let destination = FileManager.default.temporaryDirectory
-            .appendingPathComponent(file.name)
-        try? FileManager.default.removeItem(at: destination)
-
         let transfer = TransferItem(
             name: file.name,
             direction: .download,
             totalBytes: file.size)
         transfers.append(transfer)
         let id = transfer.id
-        jobs[id] = TransferJob(id: id, kind: .download(remotePath: file.path, localURL: destination))
+        let downloadsDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Downloads", isDirectory: true)
+        try? FileManager.default.createDirectory(at: downloadsDirectory, withIntermediateDirectories: true)
+        let partialURL = downloadsDirectory.appendingPathComponent("\(id.uuidString).part")
+        let finalURL = FileManager.default.temporaryDirectory.appendingPathComponent(file.name)
+        try? FileManager.default.removeItem(at: finalURL)
+        jobs[id] = TransferJob(
+            id: id,
+            kind: .download(remotePath: file.path, partialURL: partialURL, finalURL: finalURL))
         pendingJobs.append(id)
         startNextTransfer()
     }
@@ -467,8 +484,9 @@ final class AppModel: ObservableObject {
     }
 
     private func cleanupDownloadResource(for transferID: UUID) {
-        guard let job = jobs[transferID], case let .download(_, localURL) = job.kind else { return }
-        try? FileManager.default.removeItem(at: localURL)
+        guard let job = jobs[transferID], case let .download(_, partialURL, finalURL) = job.kind else { return }
+        try? FileManager.default.removeItem(at: partialURL)
+        try? FileManager.default.removeItem(at: finalURL)
     }
 
     private func restorePersistedUploads() {
