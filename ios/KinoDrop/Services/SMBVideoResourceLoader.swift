@@ -24,7 +24,6 @@ final class SMBVideoResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
                     information.contentType = self.contentType
                     information.contentLength = self.file.size ?? 0
                     information.isByteRangeAccessSupported = true
-                    information.isPlayable = true
                 }
 
                 if let dataRequest = loadingRequest.dataRequest {
