@@ -45,31 +45,6 @@ struct ConnectView: View {
                 }
 
                 Section {
-                    if !model.nearbyDevices.isEmpty {
-                        ForEach(model.nearbyDevices) { device in
-                            Button {
-                                model.useNearbyDevice(device)
-                            } label: {
-                                Label(device.name, systemImage: "desktopcomputer.and.arrow.down")
-                            }
-                        }
-                    } else {
-                        Label("Searching for KinoDrop PCs...", systemImage: "dot.radiowaves.left.and.right")
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Button {
-                        model.refreshNearbyDevices()
-                    } label: {
-                        Label("Search again", systemImage: "arrow.clockwise")
-                    }
-                } header: {
-                    Text("Nearby KinoDrop PCs")
-                } footer: {
-                    Text("Both devices must be on the same Wi-Fi network or Personal Hotspot.")
-                }
-
-                Section {
                     Button {
                         model.showQRScanner = true
                     } label: {
@@ -86,16 +61,18 @@ struct ConnectView: View {
                 if !model.savedConnections.isEmpty {
                     Section {
                         ForEach(model.savedConnections) { connection in
-                            Button {
-                                model.useSavedConnection(connection)
-                                Task { await model.connect() }
-                            } label: {
-                                Label(connection.name, systemImage: "desktopcomputer")
-                            }
-                            .swipeActions {
-                                Button("Delete", role: .destructive) {
+                            HStack {
+                                Button {
+                                    model.useSavedConnection(connection)
+                                    Task { await model.connect() }
+                                } label: {
+                                    Label(connection.name, systemImage: "desktopcomputer")
+                                }
+                                Spacer()
+                                Button("Remove", role: .destructive) {
                                     model.deleteSavedConnection(connection)
                                 }
+                                .buttonStyle(.bordered)
                             }
                         }
 

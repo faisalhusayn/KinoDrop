@@ -31,7 +31,6 @@ targets:
         INFOPLIST_KEY_NSSupportsLiveActivities: YES
         INFOPLIST_KEY_NSCameraUsageDescription: KinoDrop uses the camera to scan the connection QR code.
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: KinoDrop connects directly to your KinoDrop Windows PC on the local network.
-        INFOPLIST_KEY_NSBonjourServices: ["_kinodrop._tcp"]
         INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: KinoDrop saves downloaded photos and videos to your Photos library.
     dependencies:
       - package: AMSMB2

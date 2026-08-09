@@ -41,7 +41,6 @@ public sealed class ShareSessionViewModel : INotifyPropertyChanged
     private readonly IAppSettingsService _settingsService;
     private readonly ShareManager _shareManager;
     private readonly INetworkService _networkService;
-    private readonly IDeviceDiscoveryAdvertiser _discoveryAdvertiser;
     private readonly ITransferMonitorService _transferMonitor;
     private readonly ITransferHistoryService _historyService;
     private readonly IToastService _toastService;
@@ -74,7 +73,6 @@ public sealed class ShareSessionViewModel : INotifyPropertyChanged
         IAppSettingsService settingsService,
         ShareManager shareManager,
         INetworkService networkService,
-        IDeviceDiscoveryAdvertiser discoveryAdvertiser,
         ITransferMonitorService transferMonitor,
         ITransferHistoryService historyService,
         IToastService toastService,
@@ -87,7 +85,6 @@ public sealed class ShareSessionViewModel : INotifyPropertyChanged
         _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
         _shareManager = shareManager ?? throw new ArgumentNullException(nameof(shareManager));
         _networkService = networkService ?? throw new ArgumentNullException(nameof(networkService));
-        _discoveryAdvertiser = discoveryAdvertiser ?? throw new ArgumentNullException(nameof(discoveryAdvertiser));
         _transferMonitor = transferMonitor ?? throw new ArgumentNullException(nameof(transferMonitor));
         _historyService = historyService ?? throw new ArgumentNullException(nameof(historyService));
         _toastService = toastService ?? throw new ArgumentNullException(nameof(toastService));
@@ -213,7 +210,6 @@ public sealed class ShareSessionViewModel : INotifyPropertyChanged
             _transferMonitor.Start(workspace.TransferFolderPath);
 
             _status = SessionStatus.Running;
-            _discoveryAdvertiser.Start(session.Share.Name);
             ActiveTransfers.Clear();
             _activeByName.Clear();
             RefreshFolderContents(workspace.TransferFolderPath);
@@ -268,7 +264,6 @@ public sealed class ShareSessionViewModel : INotifyPropertyChanged
             _transferMonitor.FileSent -= OnFileSent;
             _transferMonitor.FileProgress -= OnFileProgress;
             _transferMonitor.Stop();
-            _discoveryAdvertiser.Stop();
 
             _session = null;
             _status = SessionStatus.Stopped;
@@ -518,7 +513,7 @@ public sealed class ShareSessionViewModel : INotifyPropertyChanged
             return _smbPath ?? string.Empty;
         }
 
-        return $"{_smbPath}?user={Uri.EscapeDataString(_username)}&password={Uri.EscapeDataString(_password)}";
+        return $"{_smbPath}?user={Uri.EscapeDataString(_username)}&password={Uri.EscapeDataString(_password)}&name={Uri.EscapeDataString(Environment.MachineName)}";
     }
 
     /// <summary>Shows and regenerates the connection QR code for the payload.</summary>

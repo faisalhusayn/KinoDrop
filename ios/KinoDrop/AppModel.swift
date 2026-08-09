@@ -74,13 +74,12 @@ final class AppModel: ObservableObject {
     @Published var partialStorageBytes: Int64 = 0
     @Published var transferHistory: [TransferHistoryItem] = []
     @Published var conflictRequest: TransferConflict?
-    @Published var nearbyDevices: [NearbyDevice] = []
     @Published var savedConnections: [SavedConnection] = []
     @Published private(set) var isQueuePaused = false
 
     let smb = SMBClient()
     private let keychain = KeychainStore()
-    private let nearbyBrowser = NearbyDeviceBrowser()
+    private var pendingConnectionName: String?
     private var cleanupURLs: [UUID: URL] = [:]
     private var scopedURLs: [UUID: URL] = [:]
     private enum TransferKind {
@@ -113,8 +112,6 @@ final class AppModel: ObservableObject {
         loadHistory()
         refreshPartialFileSummary()
         requestNotificationPermission()
-        nearbyBrowser.onChange = { [weak self] devices in self?.nearbyDevices = devices }
-        nearbyBrowser.start()
         Task { @MainActor [weak self] in
             await self?.autoReconnectSavedConnection()
         }
@@ -135,7 +132,8 @@ final class AppModel: ObservableObject {
 
         do {
             try await smb.connect(using: config)
-            savedConnections = try keychain.saveConnection(config)
+            savedConnections = try keychain.saveConnection(config, name: pendingConnectionName)
+            pendingConnectionName = nil
             smbDiagnostics = smb.diagnostics
             connectionState = .connected
             await refreshFiles()
@@ -223,12 +221,8 @@ final class AppModel: ObservableObject {
                !password.isEmpty {
                 config.password = password
             }
+            pendingConnectionName = queryItems.first(where: { $0.name == "name" })?.value
         }
-    }
-
-    func useNearbyDevice(_ device: NearbyDevice) {
-        config.host = device.host
-        config.share = device.share
     }
 
     func useSavedConnection(_ connection: SavedConnection) {
@@ -239,10 +233,6 @@ final class AppModel: ObservableObject {
         guard (try? keychain.deleteConnection(connection.id)) != nil else { return }
         savedConnections.removeAll { $0.id == connection.id }
         if config == connection.config { config = savedConnections.first?.config ?? .default }
-    }
-
-    func refreshNearbyDevices() {
-        nearbyBrowser.start()
     }
 
     func refreshFiles() async {
