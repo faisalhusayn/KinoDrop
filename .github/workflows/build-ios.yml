@@ -63,6 +63,7 @@ jobs:
             cp -R "$PACKAGE_FRAMEWORK" "$APP_PATH/Frameworks/"
           fi
           test -d "$APP_PATH/Frameworks/AMSMB2.framework"
+          test -d "$APP_PATH/PlugIns/KinoDropLiveActivity.appex"
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/
           zip -r KinoDrop.ipa Payload

@@ -35,6 +35,7 @@ targets:
     dependencies:
       - package: AMSMB2
       - target: KinoDropLiveActivity
+        embed: true
 
   KinoDropLiveActivity:
     type: app-extension
