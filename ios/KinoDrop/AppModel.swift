@@ -75,6 +75,7 @@ final class AppModel: ObservableObject {
     @Published var transferHistory: [TransferHistoryItem] = []
     @Published var conflictRequest: TransferConflict?
     @Published var nearbyDevices: [NearbyDevice] = []
+    @Published var savedConnections: [SavedConnection] = []
 
     let smb = SMBClient()
     private let keychain = KeychainStore()
@@ -103,7 +104,8 @@ final class AppModel: ObservableObject {
     private var conflictContinuation: CheckedContinuation<TransferConflictChoice, Never>?
 
     init() {
-        config = keychain.load() ?? .default
+        savedConnections = keychain.loadConnections()
+        config = savedConnections.first?.config ?? .default
         restorePersistedUploads()
         restorePersistedDownloads()
         loadHistory()
@@ -131,7 +133,7 @@ final class AppModel: ObservableObject {
 
         do {
             try await smb.connect(using: config)
-            try keychain.save(config)
+            savedConnections = try keychain.saveConnection(config)
             smbDiagnostics = smb.diagnostics
             connectionState = .connected
             await refreshFiles()
@@ -225,6 +227,16 @@ final class AppModel: ObservableObject {
     func useNearbyDevice(_ device: NearbyDevice) {
         config.host = device.host
         config.share = device.share
+    }
+
+    func useSavedConnection(_ connection: SavedConnection) {
+        config = connection.config
+    }
+
+    func deleteSavedConnection(_ connection: SavedConnection) {
+        guard (try? keychain.deleteConnection(connection.id)) != nil else { return }
+        savedConnections.removeAll { $0.id == connection.id }
+        if config == connection.config { config = savedConnections.first?.config ?? .default }
     }
 
     func refreshNearbyDevices() {

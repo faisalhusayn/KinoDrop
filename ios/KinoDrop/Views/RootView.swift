@@ -83,20 +83,30 @@ struct ConnectView: View {
                     Text("Pair a New PC")
                 }
 
-                if !model.config.host.isEmpty && !model.config.password.isEmpty {
+                if !model.savedConnections.isEmpty {
                     Section {
-                        Button {
-                            Task { await model.connect() }
-                        } label: {
-                            Label("Reconnect to saved PC", systemImage: "arrow.clockwise.circle.fill")
+                        ForEach(model.savedConnections) { connection in
+                            Button {
+                                model.useSavedConnection(connection)
+                                Task { await model.connect() }
+                            } label: {
+                                Label(connection.name, systemImage: "desktopcomputer")
+                            }
+                            .swipeActions {
+                                Button("Delete", role: .destructive) {
+                                    model.deleteSavedConnection(connection)
+                                }
+                            }
                         }
 
-                        DisclosureGroup("Connection details") {
-                            LabeledContent("Address", value: model.config.host)
-                            LabeledContent("Share", value: model.config.share)
+                        if !model.config.host.isEmpty && !model.config.password.isEmpty {
+                            DisclosureGroup("Connection details") {
+                                LabeledContent("Address", value: model.config.host)
+                                LabeledContent("Share", value: model.config.share)
+                            }
                         }
                     } header: {
-                        Text("Saved Connection")
+                        Text("Saved Connections")
                     }
                 }
 
