@@ -7,6 +7,7 @@ import UIKit
 private struct PersistedUpload: Codable {
     let name: String
     let remotePath: String
+    let partialRemotePath: String?
     let bookmarkData: Data
 }
 
@@ -43,7 +44,7 @@ final class AppModel: ObservableObject {
     private var cleanupURLs: [UUID: URL] = [:]
     private var scopedURLs: [UUID: URL] = [:]
     private enum TransferKind {
-        case upload(localURL: URL, remotePath: String)
+        case upload(localURL: URL, remotePath: String, partialRemotePath: String)
         case download(remotePath: String, localURL: URL)
     }
     private struct TransferJob {
@@ -197,7 +198,13 @@ final class AppModel: ObservableObject {
         let id = transfer.id
         if cleanup { cleanupURLs[id] = localURL }
         if let alreadyScopedURL { scopedURLs[id] = alreadyScopedURL }
-        jobs[id] = TransferJob(id: id, kind: .upload(localURL: localURL, remotePath: remotePath))
+        let partialRemotePath = "\(remotePath).kinodrop-\(id.uuidString).part"
+        jobs[id] = TransferJob(
+            id: id,
+            kind: .upload(
+                localURL: localURL,
+                remotePath: remotePath,
+                partialRemotePath: partialRemotePath))
         pendingJobs.append(id)
         persistQueue()
         startNextTransfer()
@@ -290,16 +297,32 @@ final class AppModel: ObservableObject {
 
     private func execute(_ job: TransferJob, progressThrottle: ProgressThrottle) async throws {
         switch job.kind {
-        case let .upload(localURL, remotePath):
-            try await smb.upload(localURL: localURL, remotePath: remotePath) { [weak self] progress in
-                guard !Task.isCancelled else { return false }
-                if progressThrottle.shouldEmit() {
-                    Task { @MainActor [weak self] in
-                        self?.updateTransferProgress(job.id, progress: progress)
-                    }
-                }
-                return true
+        case let .upload(localURL, remotePath, partialRemotePath):
+            let localSize = fileSize(localURL) ?? 0
+            let existingSize = try await smb.remoteFileSize(at: partialRemotePath)
+            let offset: Int64
+            if let existingSize, existingSize >= 0, existingSize <= localSize {
+                offset = existingSize
+            } else {
+                if existingSize != nil { try? await smb.remove(remotePath: partialRemotePath) }
+                offset = 0
             }
+
+            if let existingSize, existingSize == localSize {
+                guard progress(SMBProgress(completed: localSize, total: localSize)) else { return false }
+            } else {
+                try await smb.upload(localURL: localURL, remotePath: partialRemotePath, offset: offset) { [weak self] progress in
+                    guard !Task.isCancelled else { return false }
+                    if progressThrottle.shouldEmit() {
+                        Task { @MainActor [weak self] in
+                            self?.updateTransferProgress(job.id, progress: progress)
+                        }
+                    }
+                    return true
+                }
+            }
+            try? await smb.remove(remotePath: remotePath)
+            try await smb.move(remotePath: partialRemotePath, to: remotePath)
         case let .download(remotePath, localURL):
             try await smb.download(remotePath: remotePath, localURL: localURL) { [weak self] progress in
                 guard !Task.isCancelled else { return false }
@@ -472,7 +495,10 @@ final class AppModel: ObservableObject {
             transfers.append(transfer)
             jobs[transfer.id] = TransferJob(
                 id: transfer.id,
-                kind: .upload(localURL: url, remotePath: record.remotePath))
+                kind: .upload(
+                    localURL: url,
+                    remotePath: record.remotePath,
+                    partialRemotePath: record.partialRemotePath ?? "\(record.remotePath).kinodrop-\(transfer.id.uuidString).part"))
             pendingJobs.append(transfer.id)
             if url.startAccessingSecurityScopedResource() {
                 scopedURLs[transfer.id] = url
@@ -481,6 +507,7 @@ final class AppModel: ObservableObject {
                 restoredRecords.append(PersistedUpload(
                     name: record.name,
                     remotePath: record.remotePath,
+                    partialRemotePath: record.partialRemotePath,
                     bookmarkData: refreshedData))
             } else {
                 restoredRecords.append(record)
@@ -503,7 +530,7 @@ final class AppModel: ObservableObject {
 
         var records: [PersistedUpload] = []
         for id in ids.uniqued() {
-            guard let job = jobs[id], case let .upload(localURL, remotePath) = job.kind,
+            guard let job = jobs[id], case let .upload(localURL, remotePath, partialRemotePath) = job.kind,
                   let transfer = transfers.first(where: { $0.id == id }) else { continue }
             switch transfer.state {
             case .queued, .paused, .transferring, .failed:
@@ -511,6 +538,7 @@ final class AppModel: ObservableObject {
                 records.append(PersistedUpload(
                     name: transfer.name,
                     remotePath: remotePath,
+                    partialRemotePath: partialRemotePath,
                     bookmarkData: bookmarkData))
             case .completed, .cancelled:
                 continue

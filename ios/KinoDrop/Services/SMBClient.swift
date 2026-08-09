@@ -79,16 +79,35 @@ final class SMBClient {
     func upload(
         localURL: URL,
         remotePath: String,
+        offset: Int64 = 0,
         progress: @escaping @Sendable (SMBProgress) -> Bool) async throws {
         guard let manager else { throw SMBClientError.notConnected }
         try await manager.uploadItemPipelined(
             at: localURL,
             toPath: remotePath,
             chunkSize: 1_048_576,
-            pipelineSize: 16
+            pipelineSize: 16,
+            offset: offset
         ) { completed in
             return progress(SMBProgress(completed: completed, total: nil))
         }
+    }
+
+    func remoteFileSize(at remotePath: String) async throws -> Int64? {
+        let components = remotePath.split(separator: "/")
+        let name = String(components.last ?? "")
+        let parent = components.dropLast().joined(separator: "/")
+        return try await listDirectory(path: parent).first(where: { $0.name == name })?.size
+    }
+
+    func move(remotePath: String, to destinationPath: String) async throws {
+        guard let manager else { throw SMBClientError.notConnected }
+        try await manager.moveItem(atPath: remotePath, toPath: destinationPath)
+    }
+
+    func remove(remotePath: String) async throws {
+        guard let manager else { throw SMBClientError.notConnected }
+        try await manager.removeItem(atPath: remotePath)
     }
 
     func download(

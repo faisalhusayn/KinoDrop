@@ -1341,6 +1341,7 @@ public class SMB2Manager: NSObject, NSSecureCoding, Codable, NSCopying, CustomRe
         toPath: String,
         chunkSize: Int = 0,
         pipelineSize: Int = 4,
+        offset: Int64 = 0,
         progress: WriteProgressHandler,
         completionHandler: SimpleCompletionHandler
     ) {
@@ -1360,6 +1361,7 @@ public class SMB2Manager: NSObject, NSSecureCoding, Codable, NSCopying, CustomRe
                 toPath: toPath,
                 chunkSize: chunkSize,
                 pipelineSize: pipelineSize,
+                offset: offset,
                 progress: progress
             )
         }
@@ -1370,6 +1372,7 @@ public class SMB2Manager: NSObject, NSSecureCoding, Codable, NSCopying, CustomRe
         toPath: String,
         chunkSize: Int = 0,
         pipelineSize: Int = 4,
+        offset: Int64 = 0,
         progress: WriteProgressHandler
     ) async throws {
         try await withCheckedThrowingContinuation { continuation in
@@ -1378,6 +1381,7 @@ public class SMB2Manager: NSObject, NSSecureCoding, Codable, NSCopying, CustomRe
                 toPath: toPath,
                 chunkSize: chunkSize,
                 pipelineSize: pipelineSize,
+                offset: offset,
                 progress: progress,
                 completionHandler: asyncHandler(continuation)
             )
@@ -1812,9 +1816,15 @@ extension SMB2Manager {
         toPath: String,
         chunkSize: Int,
         pipelineSize: Int,
+        offset: Int64,
         progress: WriteProgressHandler
     ) throws {
-        let file = try SMB2FileHandle(forOverwritingIfExistsAtPath: toPath, on: client)
+        let file: SMB2FileHandle
+        if offset > 0 {
+            file = try SMB2FileHandle(forOutputAtPath: toPath, on: client)
+        } else {
+            file = try SMB2FileHandle(forOverwritingIfExistsAtPath: toPath, on: client)
+        }
         let negotiatedSize = file.optimizedWriteSize
         let chunkSize = chunkSize > 0 ? chunkSize : (negotiatedSize > 0 ? negotiatedSize : 1_048_576)
         let pipelineSize = max(1, min(pipelineSize, 8))
@@ -1825,6 +1835,7 @@ extension SMB2Manager {
             source: source,
             chunkSize: chunkSize,
             pipelineSize: pipelineSize,
+            offset: UInt64(max(0, offset)),
             progress: progress
         )
 

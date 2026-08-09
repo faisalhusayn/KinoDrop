@@ -405,18 +405,20 @@ final class SMB2FileHandle: @unchecked Sendable {
         source: FileHandle,
         chunkSize: Int,
         pipelineSize: Int,
+        offset: UInt64 = 0,
         progress: ((Int64) -> Bool)?
     ) throws {
         let handle = try handle.unwrap()
         let pipelineSize = max(1, min(pipelineSize, 16))
+        try source.seek(toFileOffset: offset)
 
         try client.withThreadSafeContext { context in
             var callbacks = (0..<pipelineSize).map { _ in SMB2Client.CBData() }
             var dataSlots = (0..<pipelineSize).map { _ in Data() }
             var offsets = [UInt64](repeating: 0, count: pipelineSize)
             var active: [Int] = []
-            var nextOffset: UInt64 = 0
-            var completedBytes: Int64 = 0
+            var nextOffset: UInt64 = offset
+            var completedBytes: Int64 = Int64(offset)
             var sourceExhausted = false
 
             func readNextChunk() throws -> Data {
