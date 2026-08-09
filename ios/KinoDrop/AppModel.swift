@@ -402,7 +402,7 @@ final class AppModel: ObservableObject {
             phase: transfer.direction == .upload ? "Uploading" : "Downloading",
             completedBytes: transfer.completedBytes,
             totalBytes: transfer.totalBytes)
-        liveActivity = try? await Activity.request(
+        liveActivity = try? Activity.request(
             attributes: attributes,
             content: ActivityContent(state: state, staleDate: nil),
             pushType: nil)
@@ -457,7 +457,7 @@ final class AppModel: ObservableObject {
             var isStale = false
             guard let url = try? URL(
                 resolvingBookmarkData: record.bookmarkData,
-                options: [.withSecurityScope, .withoutUI],
+                options: [.withoutUI],
                 relativeTo: nil,
                 bookmarkDataIsStale: &isStale),
                 url.isFileURL,
