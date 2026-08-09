@@ -217,6 +217,10 @@ final class AppModel: ObservableObject {
         config.share = device.share
     }
 
+    func refreshNearbyDevices() {
+        nearbyBrowser.start()
+    }
+
     func refreshFiles() async {
         guard isConnected else { return }
 

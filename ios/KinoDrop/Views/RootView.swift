@@ -99,11 +99,20 @@ struct ConnectView: View {
                     .disabled(model.config.host.isEmpty || model.config.password.isEmpty)
                 }
 
-                if !model.nearbyDevices.isEmpty {
-                    Section("Nearby KinoDrop PCs") {
+                Section("Nearby KinoDrop PCs") {
+                    if model.nearbyDevices.isEmpty {
+                        Text("Searching for KinoDrop PCs on this local network...")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    } else {
                         Text("Tap a PC above to fill its address. Scan the QR code for first-time credentials.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+                    }
+                    Button {
+                        model.refreshNearbyDevices()
+                    } label: {
+                        Label("Search again", systemImage: "arrow.clockwise")
                     }
                 }
 
