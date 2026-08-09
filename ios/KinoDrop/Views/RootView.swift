@@ -29,6 +29,7 @@ struct RootView: View {
 
 struct ConnectView: View {
     @ObservedObject var model: AppModel
+    @State private var showManualConnection = false
 
     var body: some View {
         NavigationStack {
@@ -44,27 +45,6 @@ struct ConnectView: View {
                 }
 
                 Section {
-                    Text("Connect to the KinoDrop share running on your Windows PC.")
-                        .foregroundStyle(.secondary)
-
-                    TextField("PC address", text: $model.config.host)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-
-                    TextField("Share", text: $model.config.share)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-
-                    TextField("Username", text: $model.config.username)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-
-                    SecureField("Password", text: $model.config.password)
-                } header: {
-                    Text("Connection")
-                }
-
-                Section {
                     if !model.nearbyDevices.isEmpty {
                         ForEach(model.nearbyDevices) { device in
                             Button {
@@ -73,18 +53,68 @@ struct ConnectView: View {
                                 Label(device.name, systemImage: "desktopcomputer.and.arrow.down")
                             }
                         }
+                    } else {
+                        Label("Searching for KinoDrop PCs...", systemImage: "dot.radiowaves.left.and.right")
+                            .foregroundStyle(.secondary)
                     }
 
                     Button {
+                        model.refreshNearbyDevices()
+                    } label: {
+                        Label("Search again", systemImage: "arrow.clockwise")
+                    }
+                } header: {
+                    Text("Nearby KinoDrop PCs")
+                } footer: {
+                    Text("Both devices must be on the same Wi-Fi network or Personal Hotspot.")
+                }
+
+                Section {
+                    Button {
                         model.showQRScanner = true
                     } label: {
-                        Label("Scan KinoDrop QR code", systemImage: "qrcode.viewfinder")
+                        Label("Scan QR code to pair", systemImage: "qrcode.viewfinder")
                     }
 
-                    if model.config.password.isEmpty {
-                        Text("First connection? Scan the QR code shown by the Windows app to fill in the secure credentials.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                    Text("Use the QR code shown by the Windows app for a first connection. Your credentials are saved securely on this iPhone.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Text("Pair a New PC")
+                }
+
+                if !model.config.host.isEmpty && !model.config.password.isEmpty {
+                    Section {
+                        Button {
+                            Task { await model.connect() }
+                        } label: {
+                            Label("Reconnect to saved PC", systemImage: "arrow.clockwise.circle.fill")
+                        }
+
+                        DisclosureGroup("Connection details") {
+                            LabeledContent("Address", value: model.config.host)
+                            LabeledContent("Share", value: model.config.share)
+                        }
+                    } header: {
+                        Text("Saved Connection")
+                    }
+                }
+
+                Section {
+                    DisclosureGroup("Enter connection manually", isExpanded: $showManualConnection) {
+                        TextField("PC address", text: $model.config.host)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+
+                        TextField("Share", text: $model.config.share)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+
+                        TextField("Username", text: $model.config.username)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+
+                        SecureField("Password", text: $model.config.password)
                     }
 
                     Button {
@@ -93,27 +123,10 @@ struct ConnectView: View {
                         if model.connectionState == .connecting {
                             ProgressView()
                         } else {
-                            Label("Connect", systemImage: "bolt.horizontal.circle.fill")
+                            Label("Connect manually", systemImage: "bolt.horizontal.circle.fill")
                         }
                     }
-                    .disabled(model.config.host.isEmpty || model.config.password.isEmpty)
-                }
-
-                Section("Nearby KinoDrop PCs") {
-                    if model.nearbyDevices.isEmpty {
-                        Text("Searching for KinoDrop PCs on this local network...")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("Tap a PC above to fill its address. Scan the QR code for first-time credentials.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                    Button {
-                        model.refreshNearbyDevices()
-                    } label: {
-                        Label("Search again", systemImage: "arrow.clockwise")
-                    }
+                    .disabled(!showManualConnection || model.config.host.isEmpty || model.config.password.isEmpty)
                 }
 
                 if let error = model.errorMessage {
