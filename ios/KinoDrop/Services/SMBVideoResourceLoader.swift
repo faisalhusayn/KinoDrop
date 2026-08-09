@@ -27,13 +27,23 @@ final class SMBVideoResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
                 }
 
                 if let dataRequest = loadingRequest.dataRequest {
-                    let offset = max(dataRequest.currentOffset, dataRequest.requestedOffset)
-                    let length = dataRequest.requestedLength
-                    let data = try await self.client.read(
-                        remotePath: self.file.path,
-                        offset: offset,
-                        length: length)
-                    dataRequest.respond(with: data)
+                    var offset = max(dataRequest.currentOffset, dataRequest.requestedOffset)
+                    var remaining = dataRequest.requestedLength
+                    let chunkSize = 4 * 1_024 * 1_024
+
+                    while remaining > 0 {
+                        try Task.checkCancellation()
+                        let requestedChunk = min(remaining, chunkSize)
+                        let data = try await self.client.read(
+                            remotePath: self.file.path,
+                            offset: offset,
+                            length: requestedChunk)
+                        guard !data.isEmpty else { break }
+                        dataRequest.respond(with: data)
+                        offset += Int64(data.count)
+                        remaining -= data.count
+                        if data.count < requestedChunk { break }
+                    }
                 }
                 loadingRequest.finishLoading()
             } catch is CancellationError {
