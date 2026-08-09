@@ -246,6 +246,17 @@ struct HomeView: View {
                         ShareSheet(items: [url])
                     }
                 }
+            .confirmationDialog(
+                "\(model.conflictRequest?.name ?? "File") already exists",
+                isPresented: Binding(
+                    get: { model.conflictRequest != nil },
+                    set: { if !$0 { model.resolveConflict(.skip) } })) {
+                Button("Overwrite") { model.resolveConflict(.overwrite) }
+                Button("Rename copy") { model.resolveConflict(.rename) }
+                Button("Skip", role: .cancel) { model.resolveConflict(.skip) }
+            } message: {
+                Text("Choose what KinoDrop should do with the existing file.")
+            }
         }
     }
 }

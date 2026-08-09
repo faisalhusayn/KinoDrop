@@ -31,6 +31,17 @@ private enum TransferValidationError: LocalizedError {
     }
 }
 
+enum TransferConflictChoice {
+    case overwrite
+    case rename
+    case skip
+}
+
+struct TransferConflict {
+    let name: String
+    let remotePath: String
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     enum ConnectionState: Equatable {
@@ -62,6 +73,7 @@ final class AppModel: ObservableObject {
     @Published var partialFileCount = 0
     @Published var partialStorageBytes: Int64 = 0
     @Published var transferHistory: [TransferHistoryItem] = []
+    @Published var conflictRequest: TransferConflict?
 
     let smb = SMBClient()
     private let keychain = KeychainStore()
@@ -86,6 +98,7 @@ final class AppModel: ObservableObject {
     private let persistedDownloadQueueKey = "pendingDownloadQueue"
     private let historyKey = "transferHistory"
     private var liveActivity: Activity<TransferActivityAttributes>?
+    private var conflictContinuation: CheckedContinuation<TransferConflictChoice, Never>?
 
     init() {
         config = keychain.load() ?? .default
@@ -276,6 +289,30 @@ final class AppModel: ObservableObject {
     }
 
     private func perform(_ job: TransferJob) async {
+        var jobToRun = job
+        if case let .upload(localURL, remotePath, _) = job.kind,
+           (try? await smb.remoteFileSize(at: remotePath)) != nil {
+            switch await waitForConflict(name: transfers.first(where: { $0.id == job.id })?.name ?? remotePath, remotePath: remotePath) {
+            case .overwrite:
+                break
+            case .skip:
+                updateTransfer(job.id) { $0.state = .cancelled }
+                activeTransferID = nil
+                activeTask = nil
+                cleanupUploadResources(for: job.id)
+                persistQueue()
+                startNextTransfer()
+                return
+            case .rename:
+                let renamedPath = renamedRemotePath(remotePath)
+                jobToRun = TransferJob(
+                    id: job.id,
+                    kind: .upload(
+                        localURL: localURL,
+                        remotePath: renamedPath,
+                        partialRemotePath: "\(renamedPath).kinodrop-\(job.id.uuidString).part"))
+            }
+        }
         updateTransfer(job.id) {
             $0.state = .transferring
             $0.startedAt = Date()
@@ -290,7 +327,7 @@ final class AppModel: ObservableObject {
             var attempt = 0
             while true {
                 do {
-                    try await execute(job, progressThrottle: progressThrottle)
+                    try await execute(jobToRun, progressThrottle: progressThrottle)
                     if Task.isCancelled { throw CancellationError() }
                     break
                 } catch {
@@ -305,7 +342,7 @@ final class AppModel: ObservableObject {
                 if let totalBytes = $0.totalBytes { $0.completedBytes = totalBytes }
                 $0.state = .completed
             }
-            if case let .download(_, partialURL, finalURL) = job.kind {
+            if case let .download(_, partialURL, finalURL) = jobToRun.kind {
                 try? FileManager.default.removeItem(at: finalURL)
                 try? FileManager.default.moveItem(at: partialURL, to: finalURL)
                 shareURL = finalURL
@@ -401,6 +438,27 @@ final class AppModel: ObservableObject {
                 }
             }
         }
+    }
+
+    private func waitForConflict(name: String, remotePath: String) async -> TransferConflictChoice {
+        conflictRequest = TransferConflict(name: name, remotePath: remotePath)
+        return await withCheckedContinuation { continuation in
+            conflictContinuation = continuation
+        }
+    }
+
+    func resolveConflict(_ choice: TransferConflictChoice) {
+        conflictRequest = nil
+        conflictContinuation?.resume(returning: choice)
+        conflictContinuation = nil
+    }
+
+    private func renamedRemotePath(_ path: String) -> String {
+        let components = path.split(separator: "/")
+        let name = String(components.last ?? "file")
+        let parent = components.dropLast().joined(separator: "/")
+        let renamed = "\(name) (copy)-\(Int(Date().timeIntervalSince1970))"
+        return parent.isEmpty ? renamed : "\(parent)/\(renamed)"
     }
 
     func download(_ file: RemoteFile) {
