@@ -99,6 +99,7 @@ struct HomeView: View {
     @ObservedObject var model: AppModel
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var showFilePicker = false
+    @State private var historySearch = ""
 
     var body: some View {
         NavigationStack {
@@ -174,10 +175,53 @@ struct HomeView: View {
                     FileBrowserView(model: model)
                 }
 
+                Section("History") {
+                    let visibleHistory = model.transferHistory.filter {
+                        historySearch.isEmpty || $0.name.localizedCaseInsensitiveContains(historySearch)
+                    }
+                    if visibleHistory.isEmpty {
+                        Text("No matching transfers")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(visibleHistory.prefix(10)) { item in
+                            HStack {
+                                Image(systemName: item.direction == .upload ? "arrow.up.circle" : "arrow.down.circle")
+                                VStack(alignment: .leading) {
+                                    Text(item.name).lineLimit(1)
+                                    Text("\(item.result) · \(ByteCountFormatter.string(fromByteCount: item.bytes, countStyle: .file))")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Text(item.date, style: .relative)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Button("Clear history", role: .destructive) {
+                            model.clearTransferHistory()
+                        }
+                    }
+                }
+                .searchable(text: $historySearch, prompt: "Search transfer history")
+
                 if let diagnostics = model.smbDiagnostics {
                     Section("Connection details") {
                         LabeledContent("SMB dialect", value: diagnostics.dialect)
                         LabeledContent("Max write", value: "\(diagnostics.maxWriteSize / 1_048_576) MB")
+                        if let liveActivityStatus = model.liveActivityStatus {
+                            LabeledContent("Live Activity", value: liveActivityStatus)
+                        }
+                    }
+                }
+
+                if model.partialFileCount > 0 {
+                    Section("Retained transfer files") {
+                        Text("\(model.partialFileCount) file(s), \(ByteCountFormatter.string(fromByteCount: model.partialStorageBytes, countStyle: .file))")
+                            .foregroundStyle(.secondary)
+                        Button("Clear orphaned files", role: .destructive) {
+                            model.clearOrphanedPartialFiles()
+                        }
                     }
                 }
 
@@ -233,7 +277,18 @@ struct TransferRow: View {
                     .foregroundStyle(.secondary)
             }
 
-            if let progress = transfer.progress {
+            if case .completed = transfer.state {
+                ProgressView(value: 1)
+                HStack {
+                    Text("100%")
+                    Spacer()
+                    if let total = transfer.totalBytes {
+                        Text(formatBytes(total))
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            } else if let progress = transfer.progress {
                 ProgressView(value: progress)
                 HStack {
                     Text("\(Int(progress * 100))%")
@@ -249,6 +304,12 @@ struct TransferRow: View {
             }
 
             HStack {
+                if let bytesPerSecond = transfer.bytesPerSecond, bytesPerSecond > 0 {
+                    Text("\(formatBytes(Int64(bytesPerSecond)))/s")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
                 if case .failed = transfer.state {
                     Button("Retry") { model.retry(transfer) }
                         .buttonStyle(.bordered)
@@ -265,6 +326,10 @@ struct TransferRow: View {
                 }
                 if case .transferring = transfer.state {
                     Button("Cancel", role: .destructive) { model.cancel(transfer) }
+                        .buttonStyle(.bordered)
+                }
+                if transfer.direction == .download, case .completed = transfer.state {
+                    Button("Save to Photos") { model.saveToPhotos(transfer) }
                         .buttonStyle(.bordered)
                 }
             }
@@ -302,6 +367,14 @@ struct TransferRow: View {
 
 struct FileBrowserView: View {
     @ObservedObject var model: AppModel
+    @State private var searchText = ""
+    @State private var sortMode = SortMode.name
+
+    private enum SortMode: String, CaseIterable {
+        case name = "Name"
+        case date = "Date"
+        case size = "Size"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -317,6 +390,15 @@ struct FileBrowserView: View {
                     .font(.subheadline)
                     .lineLimit(1)
                 Spacer()
+                Menu {
+                    Picker("Sort by", selection: $sortMode) {
+                        ForEach(SortMode.allCases, id: \.self) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "arrow.up.arrow.down")
+                }
                 Button {
                     Task { await model.refreshFiles() }
                 } label: {
@@ -328,7 +410,7 @@ struct FileBrowserView: View {
                 Text("No files in this folder")
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(model.remoteFiles) { file in
+                ForEach(sortedFiles) { file in
                     Button {
                         if file.isDirectory {
                             Task { await model.open(file) }
@@ -344,5 +426,22 @@ struct FileBrowserView: View {
             }
         }
         .task { await model.refreshFiles() }
+        .searchable(text: $searchText, prompt: "Search files")
+    }
+
+    private var sortedFiles: [RemoteFile] {
+        model.remoteFiles
+            .filter { searchText.isEmpty || $0.name.localizedCaseInsensitiveContains(searchText) }
+            .sorted { left, right in
+                if left.isDirectory != right.isDirectory { return left.isDirectory }
+                switch sortMode {
+                case .name:
+                    return left.name.localizedStandardCompare(right.name) == .orderedAscending
+                case .date:
+                    return (left.modified ?? .distantPast) > (right.modified ?? .distantPast)
+                case .size:
+                    return (left.size ?? 0) > (right.size ?? 0)
+                }
+            }
     }
 }

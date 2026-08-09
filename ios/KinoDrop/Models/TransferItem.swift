@@ -1,7 +1,7 @@
 import Foundation
 
 struct TransferItem: Identifiable {
-    enum Direction {
+    enum Direction: Codable {
         case upload
         case download
     }
@@ -22,6 +22,8 @@ struct TransferItem: Identifiable {
     var totalBytes: Int64?
     var preparationDuration: TimeInterval?
     var transferDuration: TimeInterval?
+    var startedAt: Date?
+    var bytesPerSecond: Double?
     var state: State = .queued
 
     var progress: Double? {

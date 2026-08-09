@@ -1,8 +1,10 @@
 import Foundation
 import ActivityKit
+import Photos
 import PhotosUI
 import SwiftUI
 import UIKit
+import UserNotifications
 
 private struct PersistedUpload: Codable {
     let name: String
@@ -56,6 +58,10 @@ final class AppModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var showQRScanner = false
     @Published var shareURL: URL?
+    @Published var liveActivityStatus: String?
+    @Published var partialFileCount = 0
+    @Published var partialStorageBytes: Int64 = 0
+    @Published var transferHistory: [TransferHistoryItem] = []
 
     let smb = SMBClient()
     private let keychain = KeychainStore()
@@ -78,12 +84,16 @@ final class AppModel: ObservableObject {
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
     private let persistedQueueKey = "pendingUploadQueue"
     private let persistedDownloadQueueKey = "pendingDownloadQueue"
+    private let historyKey = "transferHistory"
     private var liveActivity: Activity<TransferActivityAttributes>?
 
     init() {
         config = keychain.load() ?? .default
         restorePersistedUploads()
         restorePersistedDownloads()
+        loadHistory()
+        refreshPartialFileSummary()
+        requestNotificationPermission()
     }
 
     var isConnected: Bool { connectionState == .connected }
@@ -266,7 +276,10 @@ final class AppModel: ObservableObject {
     }
 
     private func perform(_ job: TransferJob) async {
-        updateTransfer(job.id) { $0.state = .transferring }
+        updateTransfer(job.id) {
+            $0.state = .transferring
+            $0.startedAt = Date()
+        }
         if let transfer = transfers.first(where: { $0.id == job.id }) {
             await beginLiveActivity(for: transfer)
         }
@@ -289,6 +302,7 @@ final class AppModel: ObservableObject {
             }
             updateTransfer(job.id) {
                 $0.transferDuration = Date().timeIntervalSince(transferStart)
+                if let totalBytes = $0.totalBytes { $0.completedBytes = totalBytes }
                 $0.state = .completed
             }
             if case let .download(_, partialURL, finalURL) = job.kind {
@@ -297,6 +311,8 @@ final class AppModel: ObservableObject {
                 shareURL = finalURL
             }
             cleanupUploadResources(for: job.id)
+            recordHistory(for: job.id, result: "Completed")
+            sendTransferNotification(title: "Transfer complete", body: transfers.first(where: { $0.id == job.id })?.name ?? "File transfer finished")
             await endLiveActivity(phase: "Completed", transferID: job.id)
         } catch {
             let wasPaused = pauseRequested
@@ -311,6 +327,10 @@ final class AppModel: ObservableObject {
                 cleanupDownloadResource(for: job.id)
             } else {
                 cleanupDownloadResource(for: job.id)
+            }
+            if !wasPaused {
+                recordHistory(for: job.id, result: "Failed")
+                sendTransferNotification(title: "Transfer failed", body: error.localizedDescription)
             }
             await endLiveActivity(phase: wasPaused ? "Paused" : "Stopped", transferID: job.id)
         }
@@ -460,6 +480,11 @@ final class AppModel: ObservableObject {
 
     private func updateTransferProgress(_ id: UUID, progress: SMBProgress) {
         updateTransfer(id) {
+            let now = Date()
+            if let startedAt = $0.startedAt, progress.completed > 0 {
+                let elapsed = max(now.timeIntervalSince(startedAt), 0.001)
+                $0.bytesPerSecond = Double(progress.completed) / elapsed
+            }
             $0.completedBytes = progress.completed
             if let total = progress.total { $0.totalBytes = total }
         }
@@ -469,7 +494,10 @@ final class AppModel: ObservableObject {
     }
 
     private func beginLiveActivity(for transfer: TransferItem) async {
-        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            liveActivityStatus = "Live Activities are disabled in iOS Settings."
+            return
+        }
         let attributes = TransferActivityAttributes(
             fileName: transfer.name,
             direction: transfer.direction == .upload ? "upload" : "download")
@@ -477,10 +505,15 @@ final class AppModel: ObservableObject {
             phase: transfer.direction == .upload ? "Uploading" : "Downloading",
             completedBytes: transfer.completedBytes,
             totalBytes: transfer.totalBytes)
-        liveActivity = try? Activity.request(
-            attributes: attributes,
-            content: ActivityContent(state: state, staleDate: nil),
-            pushType: nil)
+        do {
+            liveActivity = try Activity.request(
+                attributes: attributes,
+                content: ActivityContent(state: state, staleDate: nil),
+                pushType: nil)
+            liveActivityStatus = "Live Activity started."
+        } catch {
+            liveActivityStatus = "Live Activity unavailable: \(error.localizedDescription)"
+        }
     }
 
     private func updateLiveActivity(transferID: UUID) async {
@@ -503,6 +536,7 @@ final class AppModel: ObservableObject {
             totalBytes: transfer.totalBytes)
         await activity.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: .default)
         liveActivity = nil
+        liveActivityStatus = "Live Activity ended."
     }
 
     private func fileSize(_ url: URL) -> Int64? {
@@ -520,6 +554,115 @@ final class AppModel: ObservableObject {
             return destination
         } catch {
             return nil
+        }
+    }
+
+    private func requestNotificationPermission() {
+        Task {
+            _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+        }
+    }
+
+    private func sendTransferNotification(title: String, body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil)
+        UNUserNotificationCenter.current().add(request)
+    }
+
+    func refreshPartialFileSummary() {
+        let directories = [
+            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("PendingUploads", isDirectory: true),
+            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("Downloads", isDirectory: true),
+        ]
+        let activePaths = Set(jobs.values.compactMap { job -> String? in
+            switch job.kind {
+            case let .upload(localURL, _, _): return localURL.path
+            case let .download(_, partialURL, _): return partialURL.path
+            }
+        })
+        var count = 0
+        var bytes: Int64 = 0
+        for directory in directories {
+            guard let files = try? FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.fileSizeKey]) else { continue }
+            for file in files where !activePaths.contains(file.path) {
+                count += 1
+                if let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+                    bytes += Int64(size ?? 0)
+                }
+            }
+        }
+        partialFileCount = count
+        partialStorageBytes = bytes
+    }
+
+    func clearOrphanedPartialFiles() {
+        let directories = [
+            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("PendingUploads", isDirectory: true),
+            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("Downloads", isDirectory: true),
+        ]
+        let activePaths = Set(jobs.values.compactMap { job -> String? in
+            switch job.kind {
+            case let .upload(localURL, _, _): return localURL.path
+            case let .download(_, partialURL, _): return partialURL.path
+            }
+        })
+        for directory in directories {
+            guard let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { continue }
+            for file in files where !activePaths.contains(file.path) {
+                try? FileManager.default.removeItem(at: file)
+            }
+        }
+        refreshPartialFileSummary()
+    }
+
+    func clearTransferHistory() {
+        transferHistory.removeAll()
+        UserDefaults.standard.removeObject(forKey: historyKey)
+    }
+
+    func saveToPhotos(_ transfer: TransferItem) {
+        guard transfer.direction == .download,
+              case let .download(_, _, finalURL) = jobs[transfer.id]?.kind else { return }
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] status in
+            guard status == .authorized || status == .limited else { return }
+            PHPhotoLibrary.shared().performChanges({
+                let videoExtensions = ["mov", "mp4", "m4v", "avi"]
+                if videoExtensions.contains(finalURL.pathExtension.lowercased()) {
+                    PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: finalURL)
+                } else {
+                    PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: finalURL)
+                }
+            }) { success, error in
+                guard !success, let error else { return }
+                Task { @MainActor in self?.errorMessage = error.localizedDescription }
+            }
+        }
+    }
+
+    private func loadHistory() {
+        guard let data = UserDefaults.standard.data(forKey: historyKey),
+              let history = try? JSONDecoder().decode([TransferHistoryItem].self, from: data) else { return }
+        transferHistory = history
+    }
+
+    private func recordHistory(for transferID: UUID, result: String) {
+        guard let transfer = transfers.first(where: { $0.id == transferID }) else { return }
+        transferHistory.insert(TransferHistoryItem(transfer: transfer, result: result), at: 0)
+        if transferHistory.count > 100 { transferHistory.removeLast(transferHistory.count - 100) }
+        if let data = try? JSONEncoder().encode(transferHistory) {
+            UserDefaults.standard.set(data, forKey: historyKey)
         }
     }
 
