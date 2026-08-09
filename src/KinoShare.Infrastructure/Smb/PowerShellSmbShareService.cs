@@ -37,12 +37,19 @@ public sealed class PowerShellSmbShareService : ISmbShareService
             ? "Everyone"
             : $@"{Environment.MachineName}\{request.GrantAccessTo}";
 
-        string command =
-            $"New-SmbShare -Name '{PowerShellInvoker.Escape(request.ShareName)}' " +
-            $"-Path '{PowerShellInvoker.Escape(request.FolderPath)}' " +
-            $"-FullAccess '{PowerShellInvoker.Escape(grantee)}'";
+        var arguments = new List<string>
+        {
+            request.ShareName + "=" + request.FolderPath,
+        };
+        if (request.GrantAccessTo is not null)
+        {
+            arguments.Add($"/grant:{grantee},FULL");
+        }
 
-        PowerShellInvoker.PowerShellResult result = await PowerShellInvoker.InvokeAsync(command, cancellationToken);
+        NativeCommandInvoker.CommandResult result = await NativeCommandInvoker.InvokeAsync(
+            "net.exe",
+            ["share", .. arguments],
+            cancellationToken);
 
         if (!result.Succeeded)
         {
@@ -60,8 +67,10 @@ public sealed class PowerShellSmbShareService : ISmbShareService
     {
         ShareNameValidator.Validate(shareName);
 
-        string command = $"Remove-SmbShare -Name '{PowerShellInvoker.Escape(shareName)}' -Force";
-        PowerShellInvoker.PowerShellResult result = await PowerShellInvoker.InvokeAsync(command, cancellationToken);
+        NativeCommandInvoker.CommandResult result = await NativeCommandInvoker.InvokeAsync(
+            "net.exe",
+            ["share", shareName, "/delete", "/y"],
+            cancellationToken);
 
         if (!result.Succeeded)
         {
@@ -71,7 +80,10 @@ public sealed class PowerShellSmbShareService : ISmbShareService
         _logger.LogDebug("Remove-SmbShare completed for {ShareName}.", shareName);
     }
 
-    private KinoShareException MapFailure(string operation, PowerShellInvoker.PowerShellResult result, string shareName)
+    private KinoShareException MapFailure(
+        string operation,
+        NativeCommandInvoker.CommandResult result,
+        string shareName)
     {
         string detail = result.Detail;
 
