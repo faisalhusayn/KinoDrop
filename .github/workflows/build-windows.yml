@@ -3,7 +3,17 @@ name: Build Windows app
 on:
   push:
     branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'installer/**'
+      - 'KinoShare.sln'
   pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'installer/**'
+      - 'KinoShare.sln'
   workflow_dispatch:
 
 jobs:

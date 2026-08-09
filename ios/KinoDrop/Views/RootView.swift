@@ -150,7 +150,6 @@ struct HomeView: View {
     @State private var showFilePicker = false
     @State private var historySearch = ""
     @State private var showTransfers = true
-    @State private var showBrowse = true
     @State private var showHistory = false
 
     var body: some View {
@@ -243,10 +242,15 @@ struct HomeView: View {
                 }
 
                 Section {
-                    DisclosureGroup(isExpanded: $showBrowse) {
+                    NavigationLink {
                         FileBrowserView(model: model)
                     } label: {
-                        Label("Browse", systemImage: "folder")
+                        Label("Browse files", systemImage: "folder")
+                        Spacer()
+                        if !model.remoteFiles.isEmpty {
+                            Text("\(model.remoteFiles.count)")
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
 
@@ -459,6 +463,7 @@ struct FileBrowserView: View {
     @ObservedObject var model: AppModel
     @State private var searchText = ""
     @State private var sortMode = SortMode.name
+    @State private var viewMode = ViewMode.grid
 
     private enum SortMode: String, CaseIterable {
         case name = "Name"
@@ -466,52 +471,61 @@ struct FileBrowserView: View {
         case size = "Size"
     }
 
+    private enum ViewMode: String, CaseIterable {
+        case grid
+        case list
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
+        Group {
+            if sortedFiles.isEmpty {
+                ContentUnavailableView("No files", systemImage: "folder", description: Text("This folder is empty."))
+            } else if viewMode == .grid {
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16)], spacing: 18) {
+                        ForEach(sortedFiles) { file in
+                            FileGridItem(file: file, model: model)
+                        }
+                    }
+                    .padding()
+                }
+            } else {
+                List(sortedFiles) { file in
+                    FileListItem(file: file, model: model)
+                }
+                .listStyle(.plain)
+            }
+        }
+        .navigationTitle(model.browsePath.isEmpty ? "Browse" : (model.browsePath as NSString).lastPathComponent)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
                 if !model.browsePath.isEmpty {
                     Button {
                         Task { await model.goUp() }
                     } label: {
-                        Label("Up", systemImage: "arrow.up")
+                        Label("Up", systemImage: "chevron.left")
                     }
                 }
-                Text(model.browsePath.isEmpty ? "KinoShare" : model.browsePath)
-                    .font(.subheadline)
-                    .lineLimit(1)
-                Spacer()
+            }
+            ToolbarItemGroup(placement: .topBarTrailing) {
                 Menu {
+                    Picker("View", selection: $viewMode) {
+                        Label("Grid", systemImage: "square.grid.2x2").tag(ViewMode.grid)
+                        Label("List", systemImage: "list.bullet").tag(ViewMode.list)
+                    }
                     Picker("Sort by", selection: $sortMode) {
                         ForEach(SortMode.allCases, id: \.self) { mode in
                             Text(mode.rawValue).tag(mode)
                         }
                     }
                 } label: {
-                    Image(systemName: "arrow.up.arrow.down")
+                    Image(systemName: viewMode == .grid ? "square.grid.2x2" : "list.bullet")
                 }
                 Button {
                     Task { await model.refreshFiles() }
                 } label: {
                     Image(systemName: "arrow.clockwise")
-                }
-            }
-
-            if model.remoteFiles.isEmpty {
-                Text("No files in this folder")
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(sortedFiles) { file in
-                    Button {
-                        if file.isDirectory {
-                            Task { await model.open(file) }
-                        } else {
-                            model.download(file)
-                        }
-                    } label: {
-                        Label(file.name, systemImage: file.isDirectory ? "folder" : "doc")
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .buttonStyle(.plain)
                 }
             }
         }
@@ -533,5 +547,122 @@ struct FileBrowserView: View {
                     return (left.size ?? 0) > (right.size ?? 0)
                 }
             }
+    }
+}
+
+private struct FileGridItem: View {
+    let file: RemoteFile
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        Button {
+            activate()
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                RemoteFileThumbnail(file: file, model: model)
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(1, contentMode: .fit)
+                Text(file.name)
+                    .font(.subheadline)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                if !file.isDirectory {
+                    Text(file.size.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            if !file.isDirectory {
+                Button { model.download(file) } label: {
+                    Label("Download", systemImage: "arrow.down.circle")
+                }
+            }
+        }
+    }
+
+    private func activate() {
+        if file.isDirectory {
+            Task { await model.open(file) }
+        } else {
+            model.download(file)
+        }
+    }
+}
+
+private struct FileListItem: View {
+    let file: RemoteFile
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        Button {
+            if file.isDirectory {
+                Task { await model.open(file) }
+            } else {
+                model.download(file)
+            }
+        } label: {
+            HStack(spacing: 12) {
+                RemoteFileThumbnail(file: file, model: model)
+                    .frame(width: 48, height: 48)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(file.name)
+                        .lineLimit(1)
+                    Text(file.isDirectory ? "Folder" : file.size.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "File")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: file.isDirectory ? "chevron.right" : "arrow.down.circle")
+                    .foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct RemoteFileThumbnail: View {
+    let file: RemoteFile
+    @ObservedObject var model: AppModel
+    @State private var image: UIImage?
+    @State private var isLoading = false
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 12)
+                .fill(file.isDirectory ? Color.blue.opacity(0.12) : Color.secondary.opacity(0.1))
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            } else if isLoading {
+                ProgressView()
+            } else {
+                Image(systemName: file.isDirectory ? "folder.fill" : fileIcon)
+                    .font(.system(size: 34))
+                    .foregroundStyle(file.isDirectory ? .blue : .secondary)
+            }
+        }
+        .task(id: file.id) {
+            guard file.isPreviewable else { return }
+            isLoading = true
+            image = await model.thumbnail(for: file)
+            isLoading = false
+        }
+    }
+
+    private var fileIcon: String {
+        switch file.name.split(separator: ".").last?.lowercased() {
+        case "pdf": return "doc.richtext"
+        case "zip", "7z", "rar": return "doc.zipper"
+        case "mp3", "wav", "m4a": return "music.note"
+        case "txt", "md", "rtf": return "doc.text"
+        default: return "doc"
+        }
     }
 }

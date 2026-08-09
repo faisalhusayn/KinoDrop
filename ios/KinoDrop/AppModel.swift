@@ -2,6 +2,7 @@ import Foundation
 import ActivityKit
 import Photos
 import PhotosUI
+import QuickLookThumbnailing
 import SwiftUI
 import UIKit
 import UserNotifications
@@ -80,6 +81,7 @@ final class AppModel: ObservableObject {
     let smb = SMBClient()
     private let keychain = KeychainStore()
     @Published private(set) var pendingConnectionName: String?
+    private var thumbnailCache: [String: UIImage] = [:]
     private var cleanupURLs: [UUID: URL] = [:]
     private var scopedURLs: [UUID: URL] = [:]
     private enum TransferKind {
@@ -246,6 +248,44 @@ final class AppModel: ObservableObject {
             remoteFiles = try await smb.listDirectory(path: browsePath)
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    func thumbnail(for file: RemoteFile) async -> UIImage? {
+        guard file.isPreviewable else { return nil }
+        if let cached = thumbnailCache[file.id] { return cached }
+
+        let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("RemoteThumbnails", isDirectory: true)
+        let extensionName = (file.name as NSString).pathExtension
+        let localURL = directory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension(extensionName)
+
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try await smb.download(remotePath: file.path, localURL: localURL) { _ in true }
+            let request = QLThumbnailGenerator.Request(
+                fileAt: localURL,
+                size: CGSize(width: 240, height: 240),
+                scale: UIScreen.main.scale,
+                representationTypes: .thumbnail)
+            let representation: QLThumbnailRepresentation = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<QLThumbnailRepresentation, Error>) in
+                QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { result, error in
+                    if let result {
+                        continuation.resume(returning: result)
+                    } else {
+                        continuation.resume(throwing: error ?? CocoaError(.fileReadUnknown))
+                    }
+                }
+            }
+            let image = representation.uiImage
+            thumbnailCache[file.id] = image
+            try? FileManager.default.removeItem(at: localURL)
+            return image
+        } catch {
+            try? FileManager.default.removeItem(at: localURL)
+            return nil
         }
     }
 
