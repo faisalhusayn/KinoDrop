@@ -1,4 +1,5 @@
 import Foundation
+import ActivityKit
 import PhotosUI
 import SwiftUI
 import UIKit
@@ -57,6 +58,7 @@ final class AppModel: ObservableObject {
     private var isInBackground = false
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
     private let persistedQueueKey = "pendingUploadQueue"
+    private var liveActivity: Activity<TransferActivityAttributes>?
 
     init() {
         config = keychain.load() ?? .default
@@ -236,6 +238,9 @@ final class AppModel: ObservableObject {
 
     private func perform(_ job: TransferJob) async {
         updateTransfer(job.id) { $0.state = .transferring }
+        if let transfer = transfers.first(where: { $0.id == job.id }) {
+            await beginLiveActivity(for: transfer)
+        }
         let progressThrottle = ProgressThrottle()
         let transferStart = Date()
 
@@ -259,6 +264,7 @@ final class AppModel: ObservableObject {
             }
             if case let .download(_, localURL) = job.kind { shareURL = localURL }
             cleanupUploadResources(for: job.id)
+            await endLiveActivity(phase: "Completed", transferID: job.id)
         } catch {
             let wasPaused = pauseRequested
             updateTransfer(job.id) {
@@ -273,6 +279,7 @@ final class AppModel: ObservableObject {
             } else {
                 cleanupDownloadResource(for: job.id)
             }
+            await endLiveActivity(phase: wasPaused ? "Paused" : "Stopped", transferID: job.id)
         }
 
         activeTransferID = nil
@@ -381,6 +388,46 @@ final class AppModel: ObservableObject {
             $0.completedBytes = progress.completed
             if let total = progress.total { $0.totalBytes = total }
         }
+        Task { @MainActor [weak self] in
+            await self?.updateLiveActivity(transferID: id)
+        }
+    }
+
+    private func beginLiveActivity(for transfer: TransferItem) async {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        let attributes = TransferActivityAttributes(
+            fileName: transfer.name,
+            direction: transfer.direction == .upload ? "upload" : "download")
+        let state = TransferActivityAttributes.ContentState(
+            phase: transfer.direction == .upload ? "Uploading" : "Downloading",
+            completedBytes: transfer.completedBytes,
+            totalBytes: transfer.totalBytes)
+        liveActivity = try? await Activity.request(
+            attributes: attributes,
+            content: ActivityContent(state: state, staleDate: nil),
+            pushType: nil)
+    }
+
+    private func updateLiveActivity(transferID: UUID) async {
+        guard let activity = liveActivity,
+              let transfer = transfers.first(where: { $0.id == transferID }) else { return }
+        let phase = transfer.direction == .upload ? "Uploading" : "Downloading"
+        let state = TransferActivityAttributes.ContentState(
+            phase: phase,
+            completedBytes: transfer.completedBytes,
+            totalBytes: transfer.totalBytes)
+        await activity.update(ActivityContent(state: state, staleDate: nil))
+    }
+
+    private func endLiveActivity(phase: String, transferID: UUID) async {
+        guard let activity = liveActivity,
+              let transfer = transfers.first(where: { $0.id == transferID }) else { return }
+        let state = TransferActivityAttributes.ContentState(
+            phase: phase,
+            completedBytes: transfer.completedBytes,
+            totalBytes: transfer.totalBytes)
+        await activity.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: .default)
+        liveActivity = nil
     }
 
     private func fileSize(_ url: URL) -> Int64? {

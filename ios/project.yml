@@ -27,8 +27,26 @@ targets:
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_NSSupportsLiveActivities: YES
         INFOPLIST_KEY_NSCameraUsageDescription: KinoDrop uses the camera to scan the connection QR code.
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: KinoDrop connects directly to your KinoDrop Windows PC on the local network.
         INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: KinoDrop saves downloaded photos and videos to your Photos library.
     dependencies:
       - package: AMSMB2
+      - target: KinoDropLiveActivity
+
+  KinoDropLiveActivity:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "16.1"
+    sources:
+      - path: KinoDropLiveActivity
+      - path: KinoDrop/Models/TransferActivityAttributes.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.faisalhusayn.kinodrop.live-activity
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSSupportsLiveActivities: YES
