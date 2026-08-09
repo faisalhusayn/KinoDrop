@@ -396,7 +396,11 @@ final class AppModel: ObservableObject {
                     job.id,
                     progress: SMBProgress(completed: localSize, total: localSize))
             } else {
-                try await smb.upload(localURL: localURL, remotePath: partialRemotePath, offset: offset) { [weak self] progress in
+                try await smb.writeTransferMetadata(
+                    remotePath: "\(remotePath).kinodrop-meta",
+                    partialPath: partialRemotePath,
+                    totalBytes: localSize)
+                try await smb.upload(localURL: localURL, remotePath: partialRemotePath, offset: offset, total: localSize) { [weak self] progress in
                     guard !Task.isCancelled else { return false }
                     if progressThrottle.shouldEmit() {
                         Task { @MainActor [weak self] in
@@ -408,6 +412,7 @@ final class AppModel: ObservableObject {
             }
             try? await smb.remove(remotePath: remotePath)
             try await smb.move(remotePath: partialRemotePath, to: remotePath)
+            try? await smb.remove(remotePath: "\(remotePath).kinodrop-meta")
             let finalSize = try await smb.remoteFileSize(at: remotePath) ?? -1
             guard finalSize == localSize else {
                 throw TransferValidationError.sizeMismatch(expected: localSize, actual: finalSize)

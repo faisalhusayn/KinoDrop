@@ -80,6 +80,7 @@ final class SMBClient {
         localURL: URL,
         remotePath: String,
         offset: Int64 = 0,
+        total: Int64,
         progress: @escaping @Sendable (SMBProgress) -> Bool) async throws {
         guard let manager else { throw SMBClientError.notConnected }
         try await manager.uploadItemPipelined(
@@ -89,8 +90,21 @@ final class SMBClient {
             pipelineSize: 16,
             offset: offset
         ) { completed in
-            return progress(SMBProgress(completed: completed, total: nil))
+            return progress(SMBProgress(completed: completed, total: total))
         }
+    }
+
+    func writeTransferMetadata(
+        remotePath: String,
+        partialPath: String,
+        totalBytes: Int64) async throws {
+        guard let manager else { throw SMBClientError.notConnected }
+        let metadata: [String: Any] = [
+            "partialName": (partialPath as NSString).lastPathComponent,
+            "totalBytes": totalBytes,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: metadata)
+        try await manager.write(data: data, toPath: remotePath) { _ in true }
     }
 
     func remoteFileSize(at remotePath: String) async throws -> Int64? {

@@ -627,11 +627,11 @@ public sealed class ShareSessionViewModel : INotifyPropertyChanged
         {
             if (_activeByName.TryGetValue(e.FileName, out ActiveTransferEntry? entry))
             {
-                entry.Update(e.BytesCopied, e.Timestamp);
+                entry.Update(e.BytesCopied, e.Timestamp, e.TotalBytes);
             }
             else
             {
-                entry = new ActiveTransferEntry(e.FileName, e.BytesCopied, e.IsAppCopy);
+                entry = new ActiveTransferEntry(e.FileName, e.BytesCopied, e.IsAppCopy, e.TotalBytes);
                 _activeByName[e.FileName] = entry;
                 ActiveTransfers.Insert(0, entry);
                 OnPropertyChanged(nameof(HasActiveTransfers));
@@ -759,18 +759,20 @@ public sealed class ActiveTransferEntry : INotifyPropertyChanged
 {
     private const double SpeedSmoothing = 0.3;
     private long _bytesCopied;
+    private long? _totalBytes;
     private long _lastBytes;
     private DateTime _lastSample;
     private double _speedBytesPerSecond;
     private bool _completed;
 
-    public ActiveTransferEntry(string fileName, long bytesCopied, bool isAppCopy)
+    public ActiveTransferEntry(string fileName, long bytesCopied, bool isAppCopy, long? totalBytes = null)
     {
         FileName = fileName;
         _bytesCopied = bytesCopied;
         _lastBytes = bytesCopied;
         _lastSample = DateTime.Now;
         IsAppCopy = isAppCopy;
+        _totalBytes = totalBytes;
     }
 
     /// <inheritdoc />
@@ -798,18 +800,18 @@ public sealed class ActiveTransferEntry : INotifyPropertyChanged
     public string StatsText => $"{SizeText} · {SpeedText}";
 
     /// <summary>
-    /// Gets the determinate progress value. The total size is unknown while a
-    /// file arrives over SMB, so the target is a rolling estimate of the bytes
-    /// so far plus a short speed-projected window; the bar fills smoothly and
-    /// reaches ~100% as the transfer completes.
+    /// Gets the determinate progress value when the sender published a total.
     /// </summary>
-    public double ProgressValue => _bytesCopied;
+    public double ProgressValue => _totalBytes is > 0 ? Math.Min(_bytesCopied, _totalBytes.Value) : 0;
 
-    /// <summary>Gets the current rolling target for the progress bar.</summary>
-    public double ProgressMaximum => _completed ? _bytesCopied : _bytesCopied + EstimateWindowBytes();
+    /// <summary>Gets the expected total, or zero when it is unknown.</summary>
+    public double ProgressMaximum => _totalBytes is > 0 ? _totalBytes.Value : 0;
+
+    /// <summary>Gets whether the expected total is unavailable.</summary>
+    public bool IsProgressIndeterminate => _totalBytes is not > 0 && !_completed;
 
     /// <summary>Updates the bytes observed so far and the transfer speed.</summary>
-    public void Update(long bytesCopied, DateTime timestamp)
+    public void Update(long bytesCopied, DateTime timestamp, long? totalBytes = null)
     {
         if (bytesCopied == _bytesCopied)
         {
@@ -832,11 +834,16 @@ public sealed class ActiveTransferEntry : INotifyPropertyChanged
         _lastBytes = bytesCopied;
         _lastSample = timestamp;
         _bytesCopied = bytesCopied;
+        if (totalBytes is > 0)
+        {
+            _totalBytes = totalBytes;
+        }
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SizeText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpeedText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StatsText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ProgressValue)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ProgressMaximum)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsProgressIndeterminate)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(BytesCopied)));
     }
 
@@ -854,23 +861,15 @@ public sealed class ActiveTransferEntry : INotifyPropertyChanged
         _completed = true;
         _speedBytesPerSecond = 0;
         _bytesCopied = finalBytes;
+        _totalBytes = finalBytes;
         _lastBytes = finalBytes;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SizeText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpeedText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StatsText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ProgressValue)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ProgressMaximum)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsProgressIndeterminate)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(BytesCopied)));
-    }
-
-    private double EstimateWindowBytes()
-    {
-        // The total size of an incoming file is unknown until it finishes,
-        // so this is an estimate. A 4s window is the compromise between a
-        // bar that races ahead (small window) and one that lags behind
-        // (large window): it reaches ~50% after 4 seconds and ~90%+ as the
-        // transfer completes for typical hotspot speeds.
-        return Math.Max(1024 * 1024, _speedBytesPerSecond * 4);
     }
 
     internal static string FormatSpeed(double bytesPerSecond)

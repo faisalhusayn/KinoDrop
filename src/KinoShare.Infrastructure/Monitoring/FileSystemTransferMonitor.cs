@@ -3,6 +3,7 @@ namespace KinoShare.Infrastructure.Monitoring;
 using KinoShare.Core.Abstractions;
 using KinoShare.Core.Models;
 using Microsoft.Extensions.Logging;
+using System.Text.Json;
 
 /// <summary>
 /// Raises transfer events by polling the single transfer folder. A file only
@@ -18,6 +19,7 @@ using Microsoft.Extensions.Logging;
 /// </summary>
 public sealed class FileSystemTransferMonitor : ITransferMonitorService
 {
+    private const string MetadataSuffix = ".kinodrop-meta";
     private readonly ILogger<FileSystemTransferMonitor> _logger;
     private readonly TimeSpan _pollInterval;
     private readonly int _stableSamples;
@@ -142,10 +144,16 @@ public sealed class FileSystemTransferMonitor : ITransferMonitorService
     private void ScanDirectory(string folderPath)
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, long> expectedSizes = ReadExpectedSizes(folderPath);
 
         foreach (string fullPath in Directory.EnumerateFiles(folderPath))
         {
             string name = Path.GetFileName(fullPath);
+
+            if (name.EndsWith(MetadataSuffix, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
 
             if (_reported.Contains(name))
             {
@@ -171,13 +179,17 @@ public sealed class FileSystemTransferMonitor : ITransferMonitorService
 
                 // First sighting: a new file is arriving, so report progress
                 // with the bytes observed so far.
-                FileProgress?.Invoke(this, new FileProgressEventArgs(name, fullPath, size, _appCopied.Contains(name)));
+                FileProgress?.Invoke(this, new FileProgressEventArgs(
+                    name, fullPath, size, _appCopied.Contains(name), DateTime.Now,
+                    expectedSizes.GetValueOrDefault(name)));
                 continue;
             }
 
             // The file is still being tracked: it has not stabilized yet, so
             // report how much of it has arrived.
-            FileProgress?.Invoke(this, new FileProgressEventArgs(name, fullPath, size, _appCopied.Contains(name)));
+            FileProgress?.Invoke(this, new FileProgressEventArgs(
+                name, fullPath, size, _appCopied.Contains(name), DateTime.Now,
+                expectedSizes.GetValueOrDefault(name)));
 
             if (state.Size == size)
             {
@@ -223,6 +235,35 @@ public sealed class FileSystemTransferMonitor : ITransferMonitorService
         {
             _reported.Remove(name);
         }
+    }
+
+    private static Dictionary<string, long> ReadExpectedSizes(string folderPath)
+    {
+        var expectedSizes = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (string metadataPath in Directory.EnumerateFiles(folderPath, $"*{MetadataSuffix}"))
+        {
+            try
+            {
+                using JsonDocument document = JsonDocument.Parse(File.ReadAllText(metadataPath));
+                JsonElement root = document.RootElement;
+                if (!root.TryGetProperty("partialName", out JsonElement partialName)
+                    || !root.TryGetProperty("totalBytes", out JsonElement totalBytes)
+                    || !totalBytes.TryGetInt64(out long expectedSize)
+                    || expectedSize <= 0)
+                {
+                    continue;
+                }
+
+                expectedSizes[partialName.GetString() ?? string.Empty] = expectedSize;
+            }
+            catch (Exception exception) when (exception is IOException or JsonException or InvalidOperationException)
+            {
+                // The sender may still be writing the manifest.
+            }
+        }
+
+        return expectedSizes;
     }
 
     private sealed class FileState(long size)

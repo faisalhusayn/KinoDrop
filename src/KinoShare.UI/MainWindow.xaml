@@ -310,6 +310,7 @@
                                             <ProgressBar
                                                 Height="6"
                                                 Minimum="0"
+                                                IsIndeterminate="{x:Bind IsProgressIndeterminate, Mode=OneWay}"
                                                 Maximum="{x:Bind ProgressMaximum, Mode=OneWay}"
                                                 Value="{x:Bind ProgressValue, Mode=OneWay}" />
                                         </StackPanel>
