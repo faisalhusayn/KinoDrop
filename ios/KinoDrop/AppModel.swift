@@ -79,7 +79,7 @@ final class AppModel: ObservableObject {
 
     let smb = SMBClient()
     private let keychain = KeychainStore()
-    private var pendingConnectionName: String?
+    @Published private(set) var pendingConnectionName: String?
     private var cleanupURLs: [UUID: URL] = [:]
     private var scopedURLs: [UUID: URL] = [:]
     private enum TransferKind {
@@ -209,6 +209,7 @@ final class AppModel: ObservableObject {
         }
 
         config.host = host
+        pendingConnectionName = host
         let share = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         if !share.isEmpty { config.share = share }
 
@@ -221,7 +222,10 @@ final class AppModel: ObservableObject {
                !password.isEmpty {
                 config.password = password
             }
-            pendingConnectionName = queryItems.first(where: { $0.name == "name" })?.value
+            if let name = queryItems.first(where: { $0.name == "name" })?.value,
+               !name.isEmpty {
+                pendingConnectionName = name
+            }
         }
     }
 

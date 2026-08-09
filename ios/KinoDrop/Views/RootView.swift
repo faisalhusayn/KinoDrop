@@ -58,6 +58,22 @@ struct ConnectView: View {
                     Text("Pair a New PC")
                 }
 
+                if let pendingName = model.pendingConnectionName {
+                    Section("Ready to Connect") {
+                        Label(pendingName, systemImage: "desktopcomputer")
+                            .font(.headline)
+                        Text("The QR code supplied the connection details. Your password will be stored securely after connecting.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Button {
+                            Task { await model.connect() }
+                        } label: {
+                            Label("Connect to \(pendingName)", systemImage: "bolt.horizontal.circle.fill")
+                        }
+                        .disabled(model.connectionState == .connecting)
+                    }
+                }
+
                 if !model.savedConnections.isEmpty {
                     Section {
                         ForEach(model.savedConnections) { connection in
