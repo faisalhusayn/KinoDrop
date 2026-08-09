@@ -571,6 +571,7 @@ public sealed class ShareSessionViewModel : INotifyPropertyChanged
         => MarshalToUi(() =>
         {
             CompleteActive(e.FileName, e.Size);
+            RemovePartialEntries(e.FileName);
             AddTransfer("Received", e.FileName, e.Size, e.Timestamp);
             RefreshFolderContents();
         });
@@ -579,6 +580,7 @@ public sealed class ShareSessionViewModel : INotifyPropertyChanged
         => MarshalToUi(() =>
         {
             CompleteActive(e.FileName, e.Size);
+            RemovePartialEntries(e.FileName);
             AddTransfer("Sent", e.FileName, e.Size, e.Timestamp);
             RefreshFolderContents();
         });
@@ -655,6 +657,18 @@ public sealed class ShareSessionViewModel : INotifyPropertyChanged
             _activeByName.Remove(fileName);
             ActiveTransfers.Remove(entry);
             OnPropertyChanged(nameof(HasActiveTransfers));
+        }
+    }
+
+    private void RemovePartialEntries(string finalFileName)
+    {
+        string partialPrefix = $"{finalFileName}.kinodrop-";
+        foreach (ActiveTransferEntry entry in ActiveTransfers
+            .Where(entry => entry.FileName.StartsWith(partialPrefix, StringComparison.OrdinalIgnoreCase)
+                && entry.FileName.EndsWith(".part", StringComparison.OrdinalIgnoreCase))
+            .ToList())
+        {
+            RemoveActive(entry.FileName);
         }
     }
 
