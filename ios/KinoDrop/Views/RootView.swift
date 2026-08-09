@@ -1,3 +1,5 @@
+import AVKit
+import PDFKit
 import PhotosUI
 import Foundation
 import SwiftUI
@@ -464,6 +466,7 @@ struct FileBrowserView: View {
     @State private var searchText = ""
     @State private var sortMode = SortMode.name
     @State private var viewMode = ViewMode.grid
+    @State private var selectedVideo: RemoteFile?
 
     private enum SortMode: String, CaseIterable {
         case name = "Name"
@@ -484,14 +487,14 @@ struct FileBrowserView: View {
                 ScrollView {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16)], spacing: 18) {
                         ForEach(sortedFiles) { file in
-                            FileGridItem(file: file, model: model)
+                            FileGridItem(file: file, model: model) { selectedVideo = $0 }
                         }
                     }
                     .padding()
                 }
             } else {
                 List(sortedFiles) { file in
-                    FileListItem(file: file, model: model)
+                    FileListItem(file: file, model: model) { selectedVideo = $0 }
                 }
                 .listStyle(.plain)
             }
@@ -531,6 +534,11 @@ struct FileBrowserView: View {
         }
         .task { await model.refreshFiles() }
         .searchable(text: $searchText, prompt: "Search files")
+        .sheet(item: $selectedVideo) { file in
+            SMBRemotePreviewView(file: file, client: model.smb) {
+                model.download(file)
+            }
+        }
     }
 
     private var sortedFiles: [RemoteFile] {
@@ -553,6 +561,7 @@ struct FileBrowserView: View {
 private struct FileGridItem: View {
     let file: RemoteFile
     @ObservedObject var model: AppModel
+    let onPreview: (RemoteFile) -> Void
 
     var body: some View {
         Button {
@@ -587,6 +596,8 @@ private struct FileGridItem: View {
     private func activate() {
         if file.isDirectory {
             Task { await model.open(file) }
+        } else if file.canPreview {
+            onPreview(file)
         } else {
             model.download(file)
         }
@@ -596,11 +607,14 @@ private struct FileGridItem: View {
 private struct FileListItem: View {
     let file: RemoteFile
     @ObservedObject var model: AppModel
+    let onPreview: (RemoteFile) -> Void
 
     var body: some View {
         Button {
             if file.isDirectory {
                 Task { await model.open(file) }
+            } else if file.canPreview {
+                onPreview(file)
             } else {
                 model.download(file)
             }
@@ -622,6 +636,116 @@ private struct FileListItem: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+private struct SMBRemotePreviewView: View {
+    let file: RemoteFile
+    let client: SMBClient
+    let onDownload: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var player: AVPlayer?
+    @State private var image: UIImage?
+    @State private var pdfDocument: PDFDocument?
+    @State private var text: String?
+    @State private var errorMessage: String?
+    private let loader: SMBVideoResourceLoader
+
+    init(file: RemoteFile, client: SMBClient, onDownload: @escaping () -> Void) {
+        self.file = file
+        self.client = client
+        self.onDownload = onDownload
+        self.loader = SMBVideoResourceLoader(client: client, file: file)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let player {
+                    VideoPlayer(player: player)
+                        .background(.black)
+                        .onDisappear { player.pause() }
+                } else if let image {
+                    ScrollView([.vertical, .horizontal]) {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .padding()
+                    }
+                } else if let pdfDocument {
+                    PDFDocumentView(document: pdfDocument)
+                } else if let text {
+                    ScrollView([.vertical, .horizontal]) {
+                        Text(text)
+                            .font(.system(.body, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding()
+                    }
+                } else if let errorMessage {
+                    VStack(spacing: 16) {
+                        ContentUnavailableView("Preview unavailable", systemImage: "doc.questionmark", description: Text(errorMessage))
+                        Button("Download file", action: onDownload)
+                            .buttonStyle(.borderedProminent)
+                    }
+                } else {
+                    ProgressView("Loading preview...")
+                }
+            }
+            .navigationTitle(file.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .task {
+            await preparePlayer()
+        }
+    }
+
+    private func preparePlayer() async {
+        do {
+            if file.isVideo || file.isAudio {
+                guard let url = URL(string: "kinodrop-smb://media/") else { return }
+                let asset = AVURLAsset(url: url)
+                asset.resourceLoader.setDelegate(loader, queue: DispatchQueue(label: "com.faisalhusayn.kinodrop.media-loader"))
+                let newPlayer = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+                player = newPlayer
+                newPlayer.play()
+            } else {
+                let data = try await client.readAll(remotePath: file.path)
+                if file.isImage {
+                    image = UIImage(data: data)
+                } else if file.isPDF {
+                    pdfDocument = PDFDocument(data: data)
+                } else if file.isText {
+                    text = String(data: data, encoding: .utf8) ?? "Unable to decode this text file."
+                }
+                if image == nil && pdfDocument == nil && text == nil {
+                    errorMessage = "This file format cannot be previewed on iPhone."
+                }
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+private struct PDFDocumentView: UIViewRepresentable {
+    let document: PDFDocument
+
+    func makeUIView(context: Context) -> PDFView {
+        let view = PDFView()
+        view.autoScales = true
+        view.displayMode = .singlePageContinuous
+        view.document = document
+        return view
+    }
+
+    func updateUIView(_ view: PDFView, context: Context) {
+        view.document = document
     }
 }
 

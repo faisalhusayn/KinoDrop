@@ -134,6 +134,17 @@ final class SMBClient {
             return progress(SMBProgress(completed: completed, total: total))
         }
     }
+
+    func read(remotePath: String, offset: Int64, length: Int) async throws -> Data {
+        guard let manager else { throw SMBClientError.notConnected }
+        let end = offset + Int64(length)
+        return try await manager.contents(atPath: remotePath, range: offset..<end)
+    }
+
+    func readAll(remotePath: String) async throws -> Data {
+        guard let manager else { throw SMBClientError.notConnected }
+        return try await manager.contents(atPath: remotePath)
+    }
 }
 
 enum SMBClientError: LocalizedError {
