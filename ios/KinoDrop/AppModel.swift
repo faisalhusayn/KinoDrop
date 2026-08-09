@@ -309,7 +309,9 @@ final class AppModel: ObservableObject {
             }
 
             if let existingSize, existingSize == localSize {
-                guard progress(SMBProgress(completed: localSize, total: localSize)) else { return false }
+                updateTransferProgress(
+                    job.id,
+                    progress: SMBProgress(completed: localSize, total: localSize))
             } else {
                 try await smb.upload(localURL: localURL, remotePath: partialRemotePath, offset: offset) { [weak self] progress in
                     guard !Task.isCancelled else { return false }
