@@ -1,0 +1,44 @@
+name: Build Windows app
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Restore
+        run: dotnet restore KinoShare.sln
+
+      - name: Run tests
+        run: dotnet test KinoShare.sln --configuration Release --no-restore
+
+      - name: Build release
+        run: dotnet build KinoShare.sln --configuration Release --no-restore
+
+      - name: Publish Windows app
+        run: >-
+          dotnet publish src/KinoShare.UI/KinoShare.UI.csproj
+          --configuration Release
+          --runtime win-x64
+          --self-contained
+          --no-restore
+          --output artifacts/publish
+
+      - name: Upload Windows publish
+        uses: actions/upload-artifact@v4
+        with:
+          name: KinoDrop-windows-publish
+          path: artifacts/publish
