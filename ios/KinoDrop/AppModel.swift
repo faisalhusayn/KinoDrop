@@ -11,6 +11,17 @@ private struct PersistedUpload: Codable {
     let bookmarkData: Data
 }
 
+private enum TransferValidationError: LocalizedError {
+    case sizeMismatch(expected: Int64, actual: Int64)
+
+    var errorDescription: String? {
+        switch self {
+        case let .sizeMismatch(expected, actual):
+            return "Transfer verification failed: expected \(expected) bytes, received \(actual) bytes."
+        }
+    }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     enum ConnectionState: Equatable {
@@ -329,6 +340,10 @@ final class AppModel: ObservableObject {
             }
             try? await smb.remove(remotePath: remotePath)
             try await smb.move(remotePath: partialRemotePath, to: remotePath)
+            let finalSize = try await smb.remoteFileSize(at: remotePath) ?? -1
+            guard finalSize == localSize else {
+                throw TransferValidationError.sizeMismatch(expected: localSize, actual: finalSize)
+            }
         case let .download(remotePath, partialURL, _):
             let partialSize = fileSize(partialURL) ?? 0
             let offset: Int64
@@ -347,6 +362,12 @@ final class AppModel: ObservableObject {
                     }
                 }
                 return true
+            }
+            if let expectedSize = transfers.first(where: { $0.id == job.id })?.totalBytes {
+                let actualSize = fileSize(partialURL) ?? 0
+                guard actualSize == expectedSize else {
+                    throw TransferValidationError.sizeMismatch(expected: expectedSize, actual: actualSize)
+                }
             }
         }
     }
