@@ -28,12 +28,15 @@ public sealed class NetFirewallService : IFirewallService
     /// <inheritdoc />
     public async Task<bool> AllowSmbInboundAsync(CancellationToken cancellationToken = default)
     {
-        // Remove any rule left behind by a crashed session, then create a
-        // fresh one. Scoped to TCP 445 only, all profiles.
+        // Reuse an existing rule. Creating a new PowerShell firewall rule on
+        // every session start is slow and can trigger Windows Defender scans.
+        // The rule is still removed when the session stops.
         string command =
-            $"Remove-NetFirewallRule -Name '{RuleName}' -ErrorAction SilentlyContinue; " +
+            $"$rule = Get-NetFirewallRule -Name '{RuleName}' -ErrorAction SilentlyContinue; " +
+            $"if ($null -eq $rule) {{ " +
             $"New-NetFirewallRule -Name '{RuleName}' -DisplayName '{RuleName}' " +
-            $"-Direction Inbound -Protocol TCP -LocalPort 445 -Action Allow -Profile Any; " +
+            $"-Direction Inbound -Protocol TCP -LocalPort 445 -Action Allow -Profile Any | Out-Null " +
+            $"}}; " +
             $"(Get-NetFirewallRule -Name '{RuleName}' -ErrorAction SilentlyContinue) -ne $null";
 
         PowerShellInvoker.PowerShellResult result = await PowerShellInvoker.InvokeAsync(command, cancellationToken);

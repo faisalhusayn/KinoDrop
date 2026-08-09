@@ -5,6 +5,7 @@ using KinoShare.Core.Exceptions;
 using KinoShare.Core.Models;
 using KinoShare.Core.Validation;
 using Microsoft.Extensions.Logging;
+using System.Diagnostics;
 
 /// <summary>
 /// Coordinates the full lifecycle of a sharing session: provisioning a
@@ -59,6 +60,7 @@ public sealed class ShareManager
     public async Task<ShareSession> CreateShareSessionAsync(ShareRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        Stopwatch startupTimer = Stopwatch.StartNew();
 
         if (!Directory.Exists(request.FolderPath))
         {
@@ -68,34 +70,60 @@ public sealed class ShareManager
 
         ShareNameValidator.Validate(request.ShareName);
 
+        var passwordTimer = Stopwatch.StartNew();
         var user = new TemporaryUser(TemporaryUser.DefaultUsername, await ResolvePasswordAsync(cancellationToken));
+        passwordTimer.Stop();
 
-        _logger.LogInformation("Provisioning temporary user {Username} for share {ShareName}.", user.Username, request.ShareName);
+        _logger.LogInformation("Provisioning temporary user {Username} for share {ShareName} (credential: {ElapsedMs} ms).", user.Username, request.ShareName, passwordTimer.ElapsedMilliseconds);
+        Stopwatch stageTimer = Stopwatch.StartNew();
         await _userAccountService.CreateTemporaryUserAsync(user, cancellationToken);
+        stageTimer.Stop();
+        _logger.LogInformation("Temporary user ready in {ElapsedMs} ms.", stageTimer.ElapsedMilliseconds);
 
         ShareInfo? share = null;
+        Task firewallTask = AllowFirewallAsync(cancellationToken);
 
         try
         {
             var shareRequest = request with { GrantAccessTo = user.Username };
 
             _logger.LogInformation("Creating share {ShareName} for folder {FolderPath}.", shareRequest.ShareName, shareRequest.FolderPath);
+            stageTimer.Restart();
             share = await CreateShareAsyncSelfHealingAsync(shareRequest, cancellationToken);
+            stageTimer.Stop();
+            _logger.LogInformation("SMB share ready in {ElapsedMs} ms.", stageTimer.ElapsedMilliseconds);
 
             _logger.LogInformation("Granting {Username} access to folder {FolderPath}.", user.Username, request.FolderPath);
+            stageTimer.Restart();
             await _folderAccessService.GrantReadWriteAsync(request.FolderPath, user.Username, cancellationToken);
+            stageTimer.Stop();
+            _logger.LogInformation("Folder permissions ready in {ElapsedMs} ms.", stageTimer.ElapsedMilliseconds);
 
-            await AllowFirewallAsync(cancellationToken);
+            stageTimer.Restart();
+            await firewallTask;
+            stageTimer.Stop();
+            _logger.LogInformation("Firewall ready in {ElapsedMs} ms.", stageTimer.ElapsedMilliseconds);
 
             _logger.LogInformation(
                 "Share {ShareName} created; reachable at {UncPath}; temporary user {Username}.",
                 share.Name, share.UncPath, user.Username);
 
+            startupTimer.Stop();
+            _logger.LogInformation("Share startup completed in {ElapsedMs} ms.", startupTimer.ElapsedMilliseconds);
             return new ShareSession(share, user);
         }
         catch (Exception exception) when (exception is KinoShareException or OperationCanceledException)
         {
             _logger.LogError(exception, "Share session creation failed for {ShareName}; cleaning up.", request.ShareName);
+            try
+            {
+                await firewallTask;
+                await RestoreFirewallAsync(CancellationToken.None);
+            }
+            catch (Exception cleanupException) when (cleanupException is not OperationCanceledException)
+            {
+                _logger.LogWarning(cleanupException, "Failed to clean up the firewall rule after startup failure.");
+            }
             await CleanupAfterFailureAsync(share, user);
             throw;
         }
