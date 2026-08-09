@@ -11,6 +11,13 @@ private struct PersistedUpload: Codable {
     let bookmarkData: Data
 }
 
+private struct PersistedDownload: Codable {
+    let name: String
+    let remotePath: String
+    let totalBytes: Int64?
+    let partialPath: String
+}
+
 private enum TransferValidationError: LocalizedError {
     case sizeMismatch(expected: Int64, actual: Int64)
 
@@ -70,11 +77,13 @@ final class AppModel: ObservableObject {
     private var isInBackground = false
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
     private let persistedQueueKey = "pendingUploadQueue"
+    private let persistedDownloadQueueKey = "pendingDownloadQueue"
     private var liveActivity: Activity<TransferActivityAttributes>?
 
     init() {
         config = keychain.load() ?? .default
         restorePersistedUploads()
+        restorePersistedDownloads()
     }
 
     var isConnected: Bool { connectionState == .connected }
@@ -226,11 +235,13 @@ final class AppModel: ObservableObject {
         for item in items {
             guard let picked = try? await item.loadTransferable(type: PickedFile.self) else { continue }
             let preparationDuration = Date().timeIntervalSince(preparationStart)
+            let sourceURL = persistentPhotoCopy(for: picked.url) ?? picked.url
             enqueueUpload(
-                localURL: picked.url,
+                localURL: sourceURL,
                 remoteName: picked.filename,
                 preparationDuration: preparationDuration,
                 cleanup: true)
+            if sourceURL != picked.url { try? FileManager.default.removeItem(at: picked.url) }
         }
     }
 
@@ -389,6 +400,7 @@ final class AppModel: ObservableObject {
             id: id,
             kind: .download(remotePath: file.path, partialURL: partialURL, finalURL: finalURL))
         pendingJobs.append(id)
+        persistQueue()
         startNextTransfer()
     }
 
@@ -497,6 +509,20 @@ final class AppModel: ObservableObject {
         (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
     }
 
+    private func persistentPhotoCopy(for sourceURL: URL) -> URL? {
+        let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("PendingUploads", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let destination = directory.appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension(sourceURL.pathExtension)
+            try FileManager.default.copyItem(at: sourceURL, to: destination)
+            return destination
+        } catch {
+            return nil
+        }
+    }
+
     private func cleanupUploadResources(for transferID: UUID) {
         if let cleanupURL = cleanupURLs.removeValue(forKey: transferID) {
             try? FileManager.default.removeItem(at: cleanupURL)
@@ -562,6 +588,28 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func restorePersistedDownloads() {
+        guard let data = UserDefaults.standard.data(forKey: persistedDownloadQueueKey),
+              let records = try? JSONDecoder().decode([PersistedDownload].self, from: data) else {
+            return
+        }
+
+        for record in records {
+            let partialURL = URL(fileURLWithPath: record.partialPath)
+            guard FileManager.default.fileExists(atPath: partialURL.path) else { continue }
+            let transfer = TransferItem(
+                name: record.name,
+                direction: .download,
+                totalBytes: record.totalBytes)
+            let finalURL = FileManager.default.temporaryDirectory.appendingPathComponent(record.name)
+            transfers.append(transfer)
+            jobs[transfer.id] = TransferJob(
+                id: transfer.id,
+                kind: .download(remotePath: record.remotePath, partialURL: partialURL, finalURL: finalURL))
+            pendingJobs.append(transfer.id)
+        }
+    }
+
     private func persistQueue() {
         var ids = pendingJobs
         if let activeTransferID { ids.append(activeTransferID) }
@@ -588,9 +636,41 @@ final class AppModel: ObservableObject {
 
         guard !records.isEmpty, let data = try? JSONEncoder().encode(records) else {
             UserDefaults.standard.removeObject(forKey: persistedQueueKey)
+            persistDownloads()
             return
         }
         UserDefaults.standard.set(data, forKey: persistedQueueKey)
+        persistDownloads()
+    }
+
+    private func persistDownloads() {
+        var ids = pendingJobs
+        if let activeTransferID { ids.append(activeTransferID) }
+        ids.append(contentsOf: transfers.compactMap { transfer in
+            transfer.isRetryable ? transfer.id : nil
+        })
+
+        let records = ids.uniqued().compactMap { id -> PersistedDownload? in
+            guard let job = jobs[id],
+                  case let .download(remotePath, partialURL, _) = job.kind,
+                  let transfer = transfers.first(where: { $0.id == id }) else { return nil }
+            switch transfer.state {
+            case .queued, .paused, .transferring, .failed:
+                return PersistedDownload(
+                    name: transfer.name,
+                    remotePath: remotePath,
+                    totalBytes: transfer.totalBytes,
+                    partialPath: partialURL.path)
+            case .completed, .cancelled:
+                return nil
+            }
+        }
+
+        guard !records.isEmpty, let data = try? JSONEncoder().encode(records) else {
+            UserDefaults.standard.removeObject(forKey: persistedDownloadQueueKey)
+            return
+        }
+        UserDefaults.standard.set(data, forKey: persistedDownloadQueueKey)
     }
 }
 
