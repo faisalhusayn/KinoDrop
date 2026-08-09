@@ -75,10 +75,12 @@ public sealed class ShareManager
         passwordTimer.Stop();
 
         _logger.LogInformation("Provisioning temporary user {Username} for share {ShareName} (credential: {ElapsedMs} ms).", user.Username, request.ShareName, passwordTimer.ElapsedMilliseconds);
+        WriteStartupTiming("credential", passwordTimer.ElapsedMilliseconds);
         Stopwatch stageTimer = Stopwatch.StartNew();
         await _userAccountService.CreateTemporaryUserAsync(user, cancellationToken);
         stageTimer.Stop();
         _logger.LogInformation("Temporary user ready in {ElapsedMs} ms.", stageTimer.ElapsedMilliseconds);
+        WriteStartupTiming("temporary-user", stageTimer.ElapsedMilliseconds);
 
         ShareInfo? share = null;
         Task firewallTask = AllowFirewallAsync(cancellationToken);
@@ -92,17 +94,20 @@ public sealed class ShareManager
             share = await CreateShareAsyncSelfHealingAsync(shareRequest, cancellationToken);
             stageTimer.Stop();
             _logger.LogInformation("SMB share ready in {ElapsedMs} ms.", stageTimer.ElapsedMilliseconds);
+            WriteStartupTiming("smb-share", stageTimer.ElapsedMilliseconds);
 
             _logger.LogInformation("Granting {Username} access to folder {FolderPath}.", user.Username, request.FolderPath);
             stageTimer.Restart();
             await _folderAccessService.GrantReadWriteAsync(request.FolderPath, user.Username, cancellationToken);
             stageTimer.Stop();
             _logger.LogInformation("Folder permissions ready in {ElapsedMs} ms.", stageTimer.ElapsedMilliseconds);
+            WriteStartupTiming("folder-permissions", stageTimer.ElapsedMilliseconds);
 
             stageTimer.Restart();
             await firewallTask;
             stageTimer.Stop();
             _logger.LogInformation("Firewall ready in {ElapsedMs} ms.", stageTimer.ElapsedMilliseconds);
+            WriteStartupTiming("firewall-wait", stageTimer.ElapsedMilliseconds);
 
             _logger.LogInformation(
                 "Share {ShareName} created; reachable at {UncPath}; temporary user {Username}.",
@@ -110,6 +115,7 @@ public sealed class ShareManager
 
             startupTimer.Stop();
             _logger.LogInformation("Share startup completed in {ElapsedMs} ms.", startupTimer.ElapsedMilliseconds);
+            WriteStartupTiming("total", startupTimer.ElapsedMilliseconds);
             return new ShareSession(share, user);
         }
         catch (Exception exception) when (exception is KinoShareException or OperationCanceledException)
@@ -175,6 +181,26 @@ public sealed class ShareManager
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             _logger.LogWarning(exception, "Failed to remove the SMB firewall rule; it will be replaced on the next session.");
+        }
+    }
+
+    private void WriteStartupTiming(string stage, long elapsedMilliseconds)
+    {
+        try
+        {
+            string logDirectory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "KinoShare",
+                "Logs");
+            Directory.CreateDirectory(logDirectory);
+            string logPath = Path.Combine(logDirectory, "startup.log");
+            File.AppendAllText(
+                logPath,
+                $"{DateTimeOffset.Now:O} stage={stage} elapsedMs={elapsedMilliseconds}{Environment.NewLine}");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogDebug(exception, "Could not write startup timing diagnostics.");
         }
     }
 
