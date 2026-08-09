@@ -663,15 +663,12 @@ private struct SMBRemotePreviewView: View {
             Group {
                 if let player {
                     VideoPlayer(player: player)
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(.black)
                         .onDisappear { player.pause() }
                 } else if let image {
-                    ScrollView([.vertical, .horizontal]) {
-                        Image(uiImage: image)
-                            .resizable()
-                            .scaledToFit()
-                            .padding()
-                    }
+                    RemoteImagePreview(image: image)
                 } else if let pdfDocument {
                     PDFDocumentView(document: pdfDocument)
                 } else if let text {
@@ -749,6 +746,43 @@ private struct PDFDocumentView: UIViewRepresentable {
     }
 }
 
+private struct RemoteImagePreview: View {
+    let image: UIImage
+    @State private var scale: CGFloat = 1
+    @State private var baseScale: CGFloat = 1
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                Color.black.ignoresSafeArea()
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: geometry.size.width, maxHeight: geometry.size.height)
+                    .scaleEffect(scale)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        MagnificationGesture()
+                            .onChanged { value in
+                                scale = min(max(baseScale * value, 1), 4)
+                            }
+                            .onEnded { _ in
+                                withAnimation(.easeOut) {
+                                    scale = min(max(scale, 1), 4)
+                                    baseScale = scale
+                                }
+                            })
+                    .onTapGesture(count: 2) {
+                        withAnimation(.easeInOut) {
+                            scale = scale > 1 ? 1 : 2
+                            baseScale = scale
+                        }
+                    }
+            }
+        }
+    }
+}
+
 private struct RemoteFileThumbnail: View {
     let file: RemoteFile
     @ObservedObject var model: AppModel
@@ -781,6 +815,8 @@ private struct RemoteFileThumbnail: View {
     }
 
     private var fileIcon: String {
+        if file.isVideo { return "video.fill" }
+        if file.isAudio { return "waveform" }
         switch file.name.split(separator: ".").last?.lowercased() {
         case "pdf": return "doc.richtext"
         case "zip", "7z", "rar": return "doc.zipper"
