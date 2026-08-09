@@ -7,9 +7,7 @@ using Microsoft.Extensions.Logging;
 
 /// <summary>
 /// Adjusts NTFS permissions on shared folders via <c>icacls</c>: the target
-/// folder gets Modify for the sharing account, and every ancestor directory
-/// up to the drive root gets a traverse-only grant so the account can reach
-/// the folder through locked-down paths such as user profiles.
+/// folder gets Modify for the sharing account.
 /// </summary>
 public sealed class IcaclsFolderAccessService : IFolderAccessService
 {
@@ -33,33 +31,15 @@ public sealed class IcaclsFolderAccessService : IFolderAccessService
         // lookup for the unqualified username on each ACL operation.
         string localAccountName = $@"{Environment.MachineName}\{accountName}";
 
-        // A share can only be reached if the account can traverse every
-        // ancestor directory up to the drive root. Default user-profile ACLs
-        // do not grant this (AppData is locked down), and SMB clients report
-        // it as a generic failure. Traverse-only grants are minimal and safe.
-        //
-        // Spawning PowerShell is the expensive part, so all icacls calls are
-        // batched into a single invocation that fails fast on the first error.
-        var commands = new List<string>
-        {
-            $"icacls '{PowerShellInvoker.Escape(folderPath)}' /grant '{PowerShellInvoker.Escape(localAccountName)}:(OI)(CI)M'",
-        };
+        // Windows grants local users the traverse privilege by default, so
+        // changing every parent directory is unnecessary and very slow on
+        // profile folders. Grant only the permissions needed on the share.
+        string command =
+            $"icacls '{PowerShellInvoker.Escape(folderPath)}' /grant " +
+            $"'{PowerShellInvoker.Escape(localAccountName)}:(OI)(CI)M'; " +
+            "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }";
 
-        string? ancestor = Path.GetDirectoryName(folderPath);
-        string? driveRoot = Path.GetPathRoot(folderPath);
-
-        while (!string.IsNullOrEmpty(ancestor)
-            && !string.Equals(ancestor, driveRoot, StringComparison.OrdinalIgnoreCase))
-        {
-            commands.Add($"icacls '{PowerShellInvoker.Escape(ancestor)}' /grant '{PowerShellInvoker.Escape(localAccountName)}:(X)'");
-            ancestor = Path.GetDirectoryName(ancestor);
-        }
-
-        string batch = string.Join(
-            Environment.NewLine,
-            commands.Select(command => $"& {command}; if ($LASTEXITCODE -ne 0) {{ Write-Error \"{command}\"; exit 1 }}"));
-
-        PowerShellInvoker.PowerShellResult result = await PowerShellInvoker.InvokeAsync(batch, cancellationToken);
+        PowerShellInvoker.PowerShellResult result = await PowerShellInvoker.InvokeAsync(command, cancellationToken);
 
         if (!result.Succeeded)
         {
