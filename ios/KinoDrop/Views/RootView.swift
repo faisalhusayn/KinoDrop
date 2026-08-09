@@ -214,7 +214,7 @@ struct HomeView: View {
                                 }
                                 .buttonStyle(.bordered)
                                 Button("Cancel all", role: .destructive) {
-                                    model.cancelAllQueued()
+                                    Task { await model.cancelAllQueued() }
                                 }
                                 .buttonStyle(.bordered)
                             }
@@ -422,7 +422,7 @@ struct TransferRow: View {
                         .foregroundStyle(.secondary)
                 }
                 if case .transferring = transfer.state {
-                    Button("Cancel", role: .destructive) { model.cancel(transfer) }
+                    Button("Cancel", role: .destructive) { Task { await model.cancel(transfer) } }
                         .buttonStyle(.bordered)
                 }
                 if transfer.direction == .download, case .completed = transfer.state {

@@ -535,11 +535,13 @@ final class AppModel: ObservableObject {
         startNextTransfer()
     }
 
-    func cancel(_ transfer: TransferItem) {
+    func cancel(_ transfer: TransferItem) async {
         guard let index = transfers.firstIndex(where: { $0.id == transfer.id }) else { return }
         if activeTransferID == transfer.id {
             updateTransfer(transfer.id) { $0.state = .cancelled }
-            activeTask?.cancel()
+            let task = activeTask
+            task?.cancel()
+            await task?.value
             cleanupUploadResources(for: transfer.id)
             cleanupDownloadResource(for: transfer.id)
             persistQueue()
@@ -582,10 +584,12 @@ final class AppModel: ObservableObject {
         startNextTransfer()
     }
 
-    func cancelAllQueued() {
-        activeTask?.cancel()
+    func cancelAllQueued() async {
+        let task = activeTask
+        task?.cancel()
         if let activeTransferID {
             updateTransfer(activeTransferID) { $0.state = .cancelled }
+            await task?.value
             cleanupUploadResources(for: activeTransferID)
             cleanupDownloadResource(for: activeTransferID)
         }
