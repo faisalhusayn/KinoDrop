@@ -29,6 +29,10 @@ public sealed class IcaclsFolderAccessService : IFolderAccessService
         ArgumentException.ThrowIfNullOrWhiteSpace(folderPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
 
+        // Qualify the local account so icacls does not attempt a slow domain
+        // lookup for the unqualified username on each ACL operation.
+        string localAccountName = $@"{Environment.MachineName}\{accountName}";
+
         // A share can only be reached if the account can traverse every
         // ancestor directory up to the drive root. Default user-profile ACLs
         // do not grant this (AppData is locked down), and SMB clients report
@@ -38,7 +42,7 @@ public sealed class IcaclsFolderAccessService : IFolderAccessService
         // batched into a single invocation that fails fast on the first error.
         var commands = new List<string>
         {
-            $"icacls '{PowerShellInvoker.Escape(folderPath)}' /grant '{PowerShellInvoker.Escape(accountName)}:(OI)(CI)M'",
+            $"icacls '{PowerShellInvoker.Escape(folderPath)}' /grant '{PowerShellInvoker.Escape(localAccountName)}:(OI)(CI)M'",
         };
 
         string? ancestor = Path.GetDirectoryName(folderPath);
@@ -47,7 +51,7 @@ public sealed class IcaclsFolderAccessService : IFolderAccessService
         while (!string.IsNullOrEmpty(ancestor)
             && !string.Equals(ancestor, driveRoot, StringComparison.OrdinalIgnoreCase))
         {
-            commands.Add($"icacls '{PowerShellInvoker.Escape(ancestor)}' /grant '{PowerShellInvoker.Escape(accountName)}:(X)'");
+            commands.Add($"icacls '{PowerShellInvoker.Escape(ancestor)}' /grant '{PowerShellInvoker.Escape(localAccountName)}:(X)'");
             ancestor = Path.GetDirectoryName(ancestor);
         }
 
