@@ -99,6 +99,9 @@ public sealed class MdnsAdvertiser : IDeviceDiscoveryAdvertiser
     private static UdpClient CreateClient(IPAddress address)
     {
         var client = new UdpClient(AddressFamily.InterNetwork);
+        client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ExclusiveAddressUse, false);
+        client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+        client.Client.Bind(new IPEndPoint(address, Port));
         client.Client.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastInterface, address.GetAddressBytes());
         client.Client.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastTimeToLive, 255);
         return client;
