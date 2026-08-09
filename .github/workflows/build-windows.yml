@@ -20,7 +20,7 @@ jobs:
           dotnet-version: 9.0.x
 
       - name: Restore
-        run: dotnet restore KinoShare.sln
+        run: dotnet restore KinoShare.sln --runtime win-x64
 
       - name: Run tests
         run: dotnet test KinoShare.sln --configuration Release --no-restore

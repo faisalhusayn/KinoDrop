@@ -105,8 +105,9 @@ final class AppModel: ObservableObject {
     private var conflictContinuation: CheckedContinuation<TransferConflictChoice, Never>?
 
     init() {
-        savedConnections = keychain.loadConnections()
-        config = savedConnections.first?.config ?? .default
+        let loadedConnections = keychain.loadConnections()
+        savedConnections = loadedConnections
+        config = loadedConnections.first?.config ?? .default
         restorePersistedUploads()
         restorePersistedDownloads()
         loadHistory()
@@ -799,7 +800,8 @@ final class AppModel: ObservableObject {
                 }
             }) { success, error in
                 guard !success, let error else { return }
-                Task { @MainActor in self?.errorMessage = error.localizedDescription }
+                let message = error.localizedDescription
+                Task { @MainActor [weak self] in self?.errorMessage = message }
             }
         }
     }
