@@ -12,7 +12,12 @@ public sealed class NetworkService : INetworkService
 {
     /// <inheritdoc />
     public string? GetPrimaryPrivateIpAddressV4()
+        => GetPrivateIpAddressesV4().FirstOrDefault();
+
+    /// <inheritdoc />
+    public IReadOnlyList<string> GetPrivateIpAddressesV4()
     {
+        var addresses = new List<string>();
         foreach (NetworkInterface networkInterface in NetworkInterface.GetAllNetworkInterfaces())
         {
             if (networkInterface.OperationalStatus != OperationalStatus.Up)
@@ -41,11 +46,11 @@ public sealed class NetworkService : INetworkService
 
                 if (isPrivate)
                 {
-                    return address.Address.ToString();
+                    addresses.Add(address.Address.ToString());
                 }
             }
         }
 
-        return null;
+        return addresses;
     }
 }

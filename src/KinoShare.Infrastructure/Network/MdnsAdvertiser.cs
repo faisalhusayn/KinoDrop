@@ -14,7 +14,7 @@ public sealed class MdnsAdvertiser : IDeviceDiscoveryAdvertiser
     private readonly INetworkService _network;
     private readonly ILogger<MdnsAdvertiser> _logger;
     private readonly object _sync = new();
-    private UdpClient? _client;
+    private List<UdpClient> _clients = [];
     private CancellationTokenSource? _cancellation;
     private string? _serviceName;
     private string? _hostName;
@@ -29,17 +29,15 @@ public sealed class MdnsAdvertiser : IDeviceDiscoveryAdvertiser
     public void Start(string shareName)
     {
         Stop();
-        if (_network.GetPrimaryPrivateIpAddressV4() is null) return;
+        IReadOnlyList<string> addresses = _network.GetPrivateIpAddressesV4();
+        if (addresses.Count == 0) return;
 
         lock (_sync)
         {
             _shareName = shareName;
             _hostName = $"{Environment.MachineName}.local";
             _serviceName = $"{Environment.MachineName}._kinodrop._tcp.local";
-            _client = new UdpClient(AddressFamily.InterNetwork);
-            _client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-            _client.Client.Bind(new IPEndPoint(IPAddress.Any, Port));
-            _client.JoinMulticastGroup(MulticastAddress);
+            _clients = addresses.Select(address => CreateClient(IPAddress.Parse(address))).ToList();
             _cancellation = new CancellationTokenSource();
             _ = AdvertiseLoopAsync(_cancellation.Token);
         }
@@ -54,8 +52,8 @@ public sealed class MdnsAdvertiser : IDeviceDiscoveryAdvertiser
             _cancellation?.Cancel();
             _cancellation?.Dispose();
             _cancellation = null;
-            _client?.Dispose();
-            _client = null;
+            foreach (UdpClient client in _clients) client.Dispose();
+            _clients = [];
         }
     }
 
@@ -82,17 +80,28 @@ public sealed class MdnsAdvertiser : IDeviceDiscoveryAdvertiser
 
     private void Announce()
     {
-        string? address = _network.GetPrimaryPrivateIpAddressV4();
-        if (address is null || _client is null || _serviceName is null || _hostName is null || _shareName is null) return;
+        IReadOnlyList<string> addresses = _network.GetPrivateIpAddressesV4();
+        if (addresses.Count == 0 || _serviceName is null || _hostName is null || _shareName is null) return;
         try
         {
-            byte[] packet = BuildPacket(IPAddress.Parse(address));
-            _client.Send(packet, packet.Length, new IPEndPoint(MulticastAddress, Port));
+            for (int index = 0; index < Math.Min(addresses.Count, _clients.Count); index++)
+            {
+                byte[] packet = BuildPacket(IPAddress.Parse(addresses[index]));
+                _clients[index].Send(packet, packet.Length, new IPEndPoint(MulticastAddress, Port));
+            }
         }
         catch (Exception exception) when (exception is SocketException or ObjectDisposedException)
         {
             _logger.LogDebug(exception, "Could not advertise the KinoDrop Bonjour service.");
         }
+    }
+
+    private static UdpClient CreateClient(IPAddress address)
+    {
+        var client = new UdpClient(AddressFamily.InterNetwork);
+        client.Client.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastInterface, address.GetAddressBytes());
+        client.Client.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastTimeToLive, 255);
+        return client;
     }
 
     private byte[] BuildPacket(IPAddress address)

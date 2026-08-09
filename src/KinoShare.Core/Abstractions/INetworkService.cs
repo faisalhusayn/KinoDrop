@@ -6,6 +6,9 @@ namespace KinoShare.Core.Abstractions;
 /// </summary>
 public interface INetworkService
 {
+    /// <summary>Returns all active private IPv4 addresses on this machine.</summary>
+    IReadOnlyList<string> GetPrivateIpAddressesV4();
+
     /// <summary>
     /// Returns the primary private IPv4 address clients can use to reach
     /// this machine, or <c>null</c> when no suitable address exists.
