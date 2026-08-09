@@ -637,6 +637,8 @@ final class AppModel: ObservableObject {
     }
 
     private func updateTransferProgress(_ id: UUID, progress: SMBProgress) {
+        guard let transfer = transfers.first(where: { $0.id == id }),
+              case .transferring = transfer.state else { return }
         updateTransfer(id) {
             let now = Date()
             if let startedAt = $0.startedAt, progress.completed > 0 {

@@ -385,7 +385,7 @@ struct TransferRow: View {
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-            } else if let progress = transfer.progress {
+            } else if case .transferring = transfer.state, let progress = transfer.progress {
                 ProgressView(value: progress)
                 HStack {
                     Text("\(Int(progress * 100))%")
