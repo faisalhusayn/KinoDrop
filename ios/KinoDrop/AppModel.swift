@@ -76,6 +76,7 @@ final class AppModel: ObservableObject {
     @Published var conflictRequest: TransferConflict?
     @Published var nearbyDevices: [NearbyDevice] = []
     @Published var savedConnections: [SavedConnection] = []
+    @Published private(set) var isQueuePaused = false
 
     let smb = SMBClient()
     private let keychain = KeychainStore()
@@ -171,7 +172,7 @@ final class AppModel: ObservableObject {
         switch phase {
         case .active:
             isInBackground = false
-            pauseRequested = false
+            pauseRequested = isQueuePaused
             if backgroundTaskID != .invalid {
                 UIApplication.shared.endBackgroundTask(backgroundTaskID)
                 backgroundTaskID = .invalid
@@ -553,6 +554,49 @@ final class AppModel: ObservableObject {
             cleanupDownloadResource(for: transfer.id)
             persistQueue()
         }
+    }
+
+    func toggleQueuePause() {
+        isQueuePaused.toggle()
+        pauseRequested = isQueuePaused
+        if isQueuePaused {
+            activeTask?.cancel()
+        } else {
+            startNextTransfer()
+        }
+        persistQueue()
+    }
+
+    func retryAllFailed() {
+        for transfer in transfers where transfer.isRetryable {
+            guard !pendingJobs.contains(transfer.id) else { continue }
+            updateTransfer(transfer.id) {
+                $0.state = .queued
+                $0.completedBytes = 0
+                $0.transferDuration = nil
+            }
+            pendingJobs.append(transfer.id)
+        }
+        persistQueue()
+        startNextTransfer()
+    }
+
+    func cancelAllQueued() {
+        activeTask?.cancel()
+        if let activeTransferID {
+            updateTransfer(activeTransferID) { $0.state = .cancelled }
+            cleanupUploadResources(for: activeTransferID)
+            cleanupDownloadResource(for: activeTransferID)
+        }
+        for id in pendingJobs {
+            updateTransfer(id) { $0.state = .cancelled }
+            cleanupUploadResources(for: id)
+            cleanupDownloadResource(for: id)
+        }
+        pendingJobs.removeAll()
+        activeTransferID = nil
+        activeTask = nil
+        persistQueue()
     }
 
     func retry(_ transfer: TransferItem) {

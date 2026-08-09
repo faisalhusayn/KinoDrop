@@ -203,6 +203,23 @@ struct HomeView: View {
 
                 Section {
                     DisclosureGroup(isExpanded: $showTransfers) {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack {
+                                Button(model.isQueuePaused ? "Resume queue" : "Pause queue") {
+                                    model.toggleQueuePause()
+                                }
+                                .buttonStyle(.bordered)
+                                Button("Retry failed") {
+                                    model.retryAllFailed()
+                                }
+                                .buttonStyle(.bordered)
+                                Button("Cancel all", role: .destructive) {
+                                    model.cancelAllQueued()
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+
                         if model.transfers.isEmpty {
                             Label("Nothing transferred yet", systemImage: "tray")
                                 .foregroundStyle(.secondary)
