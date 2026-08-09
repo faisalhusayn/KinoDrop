@@ -25,7 +25,7 @@ public sealed class FileSystemTransferMonitor : ITransferMonitorService
     private readonly int _stableSamples;
 
     private readonly Dictionary<string, FileState> _states = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> _reported = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, long> _reported = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _appCopied = new(StringComparer.OrdinalIgnoreCase);
 
     private CancellationTokenSource? _cts;
@@ -79,7 +79,14 @@ public sealed class FileSystemTransferMonitor : ITransferMonitorService
         // transfers when the session starts.
         foreach (string file in Directory.EnumerateFiles(_transferFolderPath))
         {
-            _reported.Add(Path.GetFileName(file));
+            try
+            {
+                _reported[Path.GetFileName(file)] = new FileInfo(file).Length;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // The file may disappear while the session is starting.
+            }
         }
 
         _cts = new CancellationTokenSource();
@@ -155,12 +162,6 @@ public sealed class FileSystemTransferMonitor : ITransferMonitorService
                 continue;
             }
 
-            if (_reported.Contains(name))
-            {
-                seen.Add(name);
-                continue;
-            }
-
             long size;
             try
             {
@@ -169,6 +170,19 @@ public sealed class FileSystemTransferMonitor : ITransferMonitorService
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
                 continue;
+            }
+
+            if (_reported.TryGetValue(name, out long reportedSize))
+            {
+                if (reportedSize == size)
+                {
+                    seen.Add(name);
+                    continue;
+                }
+
+                // An existing file changed after the session started; treat
+                // it as a new transfer rather than ignoring the overwrite.
+                _reported.Remove(name);
             }
 
             seen.Add(name);
@@ -198,7 +212,7 @@ public sealed class FileSystemTransferMonitor : ITransferMonitorService
                 if (state.StableSamples >= _stableSamples)
                 {
                     _states.Remove(name);
-                    _reported.Add(name);
+                    _reported[name] = size;
 
                     bool sentByApp = _appCopied.Contains(name);
                     var args = new FileTransferredEventArgs(name, fullPath, size);
@@ -231,7 +245,7 @@ public sealed class FileSystemTransferMonitor : ITransferMonitorService
             _states.Remove(name);
         }
 
-        foreach (string name in _reported.Where(name => !seen.Contains(name)).ToList())
+        foreach (string name in _reported.Keys.Where(name => !seen.Contains(name)).ToList())
         {
             _reported.Remove(name);
         }
