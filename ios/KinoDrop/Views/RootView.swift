@@ -100,6 +100,9 @@ struct HomeView: View {
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var showFilePicker = false
     @State private var historySearch = ""
+    @State private var showTransfers = true
+    @State private var showBrowse = true
+    @State private var showHistory = false
 
     var body: some View {
         NavigationStack {
@@ -143,64 +146,74 @@ struct HomeView: View {
                 }
 
                 Section {
-                    if model.transfers.isEmpty {
-                        Label("Nothing transferred yet", systemImage: "tray")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(model.transfers) { transfer in
-                            TransferRow(transfer: transfer, model: model)
-                        }
-                        if model.transfers.contains(where: { transfer in
-                            switch transfer.state {
-                            case .completed, .cancelled: return true
-                            default: return false
+                    DisclosureGroup(isExpanded: $showTransfers) {
+                        if model.transfers.isEmpty {
+                            Label("Nothing transferred yet", systemImage: "tray")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(model.transfers.reversed()) { transfer in
+                                TransferRow(transfer: transfer, model: model)
                             }
-                        }) {
-                            Button("Clear completed", role: .destructive) {
-                                model.clearFinishedTransfers()
+                            if model.transfers.contains(where: { transfer in
+                                switch transfer.state {
+                                case .completed, .cancelled: return true
+                                default: return false
+                                }
+                            }) {
+                                Button("Clear completed", role: .destructive) {
+                                    model.clearFinishedTransfers()
+                                }
                             }
                         }
-                    }
-                } header: {
-                    HStack {
-                        Text("Transfers")
-                        Spacer()
-                        Text("1 active at a time")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    } label: {
+                        HStack {
+                            Text("Transfers")
+                            Spacer()
+                            Text("1 active at a time")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
 
-                Section("Browse") {
-                    FileBrowserView(model: model)
+                Section {
+                    DisclosureGroup(isExpanded: $showBrowse) {
+                        FileBrowserView(model: model)
+                    } label: {
+                        Label("Browse", systemImage: "folder")
+                    }
                 }
 
-                Section("History") {
-                    let visibleHistory = model.transferHistory.filter {
-                        historySearch.isEmpty || $0.name.localizedCaseInsensitiveContains(historySearch)
-                    }
-                    if visibleHistory.isEmpty {
-                        Text("No matching transfers")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(visibleHistory.prefix(10)) { item in
-                            HStack {
-                                Image(systemName: item.direction == .upload ? "arrow.up.circle" : "arrow.down.circle")
-                                VStack(alignment: .leading) {
-                                    Text(item.name).lineLimit(1)
-                                    Text("\(item.result) · \(ByteCountFormatter.string(fromByteCount: item.bytes, countStyle: .file))")
-                                        .font(.caption)
+                Section {
+                    DisclosureGroup(isExpanded: $showHistory) {
+                        let visibleHistory = model.transferHistory.filter {
+                            historySearch.isEmpty || $0.name.localizedCaseInsensitiveContains(historySearch)
+                        }
+                        if visibleHistory.isEmpty {
+                            Text("No matching transfers")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(visibleHistory.prefix(10)) { item in
+                                HStack {
+                                    Image(systemName: item.direction == .upload ? "arrow.up.circle" : "arrow.down.circle")
+                                    VStack(alignment: .leading) {
+                                        Text(item.name).lineLimit(1)
+                                        Text("\(item.result) · \(ByteCountFormatter.string(fromByteCount: item.bytes, countStyle: .file))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Text(item.date, style: .relative)
+                                        .font(.caption2)
                                         .foregroundStyle(.secondary)
                                 }
-                                Spacer()
-                                Text(item.date, style: .relative)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
+                            }
+                            Button("Clear history", role: .destructive) {
+                                model.clearTransferHistory()
                             }
                         }
-                        Button("Clear history", role: .destructive) {
-                            model.clearTransferHistory()
-                        }
+                    } label: {
+                        Label("History", systemImage: "clock.arrow.circlepath")
                     }
                 }
                 .searchable(text: $historySearch, prompt: "Search transfer history")
