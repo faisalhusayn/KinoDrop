@@ -74,9 +74,11 @@ final class AppModel: ObservableObject {
     @Published var partialStorageBytes: Int64 = 0
     @Published var transferHistory: [TransferHistoryItem] = []
     @Published var conflictRequest: TransferConflict?
+    @Published var nearbyDevices: [NearbyDevice] = []
 
     let smb = SMBClient()
     private let keychain = KeychainStore()
+    private let nearbyBrowser = NearbyDeviceBrowser()
     private var cleanupURLs: [UUID: URL] = [:]
     private var scopedURLs: [UUID: URL] = [:]
     private enum TransferKind {
@@ -107,6 +109,8 @@ final class AppModel: ObservableObject {
         loadHistory()
         refreshPartialFileSummary()
         requestNotificationPermission()
+        nearbyBrowser.onChange = { [weak self] devices in self?.nearbyDevices = devices }
+        nearbyBrowser.start()
     }
 
     var isConnected: Bool { connectionState == .connected }
@@ -206,6 +210,11 @@ final class AppModel: ObservableObject {
                 config.password = password
             }
         }
+    }
+
+    func useNearbyDevice(_ device: NearbyDevice) {
+        config.host = device.host
+        config.share = device.share
     }
 
     func refreshFiles() async {

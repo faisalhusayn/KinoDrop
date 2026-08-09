@@ -3,6 +3,7 @@ namespace KinoShare.Infrastructure.DependencyInjection;
 using KinoShare.Core.Abstractions;
 using KinoShare.Core.Security;
 using KinoShare.Infrastructure.Firewall;
+using KinoShare.Infrastructure.Network;
 using KinoShare.Infrastructure.Settings;
 using KinoShare.Infrastructure.Smb;
 using KinoShare.Infrastructure.Users;
@@ -30,6 +31,7 @@ public static class ServiceCollectionExtensions
             .AddSingleton<IAppSettingsService, AppSettingsService>()
             .AddSingleton<ITransferHistoryService, TransferHistoryService>()
             .AddSingleton<IDeviceCredentialStore, DeviceCredentialStore>()
-            .AddSingleton<IFirewallService, NetFirewallService>();
+            .AddSingleton<IFirewallService, NetFirewallService>()
+            .AddSingleton<IDeviceDiscoveryAdvertiser, MdnsAdvertiser>();
     }
 }

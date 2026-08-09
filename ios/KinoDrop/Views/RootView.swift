@@ -65,6 +65,16 @@ struct ConnectView: View {
                 }
 
                 Section {
+                    if !model.nearbyDevices.isEmpty {
+                        ForEach(model.nearbyDevices) { device in
+                            Button {
+                                model.useNearbyDevice(device)
+                            } label: {
+                                Label(device.name, systemImage: "desktopcomputer.and.arrow.down")
+                            }
+                        }
+                    }
+
                     Button {
                         model.showQRScanner = true
                     } label: {
@@ -87,6 +97,14 @@ struct ConnectView: View {
                         }
                     }
                     .disabled(model.config.host.isEmpty || model.config.password.isEmpty)
+                }
+
+                if !model.nearbyDevices.isEmpty {
+                    Section("Nearby KinoDrop PCs") {
+                        Text("Tap a PC above to fill its address. Scan the QR code for first-time credentials.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 if let error = model.errorMessage {
