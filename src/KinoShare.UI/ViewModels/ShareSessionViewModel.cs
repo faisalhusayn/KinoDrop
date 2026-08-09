@@ -202,7 +202,7 @@ public sealed class ShareSessionViewModel : INotifyPropertyChanged
             _session = session;
             SetFolderPath(workspace.TransferFolderPath);
             SetCredentials(session);
-            RefreshQrCode(_smbPath);
+            RefreshQrCode(BuildQrPayload());
 
             _transferMonitor.FileReceived += OnFileReceived;
             _transferMonitor.FileSent += OnFileSent;
@@ -502,6 +502,18 @@ public sealed class ShareSessionViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(SmbPath));
         OnPropertyChanged(nameof(Username));
         OnPropertyChanged(nameof(Password));
+    }
+
+    private string BuildQrPayload()
+    {
+        if (string.IsNullOrWhiteSpace(_smbPath)
+            || string.IsNullOrWhiteSpace(_username)
+            || string.IsNullOrWhiteSpace(_password))
+        {
+            return _smbPath ?? string.Empty;
+        }
+
+        return $"{_smbPath}?user={Uri.EscapeDataString(_username)}&password={Uri.EscapeDataString(_password)}";
     }
 
     /// <summary>Shows and regenerates the connection QR code for the payload.</summary>

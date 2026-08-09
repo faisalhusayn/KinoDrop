@@ -195,6 +195,17 @@ final class AppModel: ObservableObject {
         config.host = host
         let share = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         if !share.isEmpty { config.share = share }
+
+        if let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
+            if let username = queryItems.first(where: { $0.name == "user" })?.value,
+               !username.isEmpty {
+                config.username = username
+            }
+            if let password = queryItems.first(where: { $0.name == "password" })?.value,
+               !password.isEmpty {
+                config.password = password
+            }
+        }
     }
 
     func refreshFiles() async {

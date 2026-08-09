@@ -71,6 +71,12 @@ struct ConnectView: View {
                         Label("Scan KinoDrop QR code", systemImage: "qrcode.viewfinder")
                     }
 
+                    if model.config.password.isEmpty {
+                        Text("First connection? Scan the QR code shown by the Windows app to fill in the secure credentials.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
                     Button {
                         Task { await model.connect() }
                     } label: {
