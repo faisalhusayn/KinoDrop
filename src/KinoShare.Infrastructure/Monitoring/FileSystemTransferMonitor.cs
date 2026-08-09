@@ -25,7 +25,7 @@ public sealed class FileSystemTransferMonitor : ITransferMonitorService
     private readonly int _stableSamples;
 
     private readonly Dictionary<string, FileState> _states = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, long> _reported = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, FileFingerprint> _reported = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _appCopied = new(StringComparer.OrdinalIgnoreCase);
 
     private CancellationTokenSource? _cts;
@@ -81,7 +81,7 @@ public sealed class FileSystemTransferMonitor : ITransferMonitorService
         {
             try
             {
-                _reported[Path.GetFileName(file)] = new FileInfo(file).Length;
+                _reported[Path.GetFileName(file)] = FileFingerprint.Read(file);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
@@ -163,18 +163,20 @@ public sealed class FileSystemTransferMonitor : ITransferMonitorService
             }
 
             long size;
+            FileFingerprint fingerprint;
             try
             {
-                size = new FileInfo(fullPath).Length;
+                fingerprint = FileFingerprint.Read(fullPath);
+                size = fingerprint.Length;
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
                 continue;
             }
 
-            if (_reported.TryGetValue(name, out long reportedSize))
+            if (_reported.TryGetValue(name, out FileFingerprint? reportedFingerprint))
             {
-                if (reportedSize == size)
+                if (reportedFingerprint == fingerprint)
                 {
                     seen.Add(name);
                     continue;
@@ -212,7 +214,7 @@ public sealed class FileSystemTransferMonitor : ITransferMonitorService
                 if (state.StableSamples >= _stableSamples)
                 {
                     _states.Remove(name);
-                    _reported[name] = size;
+                    _reported[name] = fingerprint;
 
                     bool sentByApp = _appCopied.Contains(name);
                     var args = new FileTransferredEventArgs(name, fullPath, size);
@@ -278,6 +280,15 @@ public sealed class FileSystemTransferMonitor : ITransferMonitorService
         }
 
         return expectedSizes;
+    }
+
+    private sealed record FileFingerprint(long Length, DateTime LastWriteTimeUtc, DateTime CreationTimeUtc)
+    {
+        public static FileFingerprint Read(string path)
+        {
+            FileInfo file = new(path);
+            return new FileFingerprint(file.Length, file.LastWriteTimeUtc, file.CreationTimeUtc);
+        }
     }
 
     private sealed class FileState(long size)
