@@ -1,5 +1,6 @@
 import Foundation
 import ActivityKit
+import AVFoundation
 import Photos
 import PhotosUI
 import QuickLookThumbnailing
@@ -252,8 +253,24 @@ final class AppModel: ObservableObject {
     }
 
     func thumbnail(for file: RemoteFile) async -> UIImage? {
-        guard file.isPreviewable else { return nil }
+        guard file.isPreviewable || file.isVideo else { return nil }
         if let cached = thumbnailCache[file.id] { return cached }
+
+        if file.isVideo {
+            do {
+                let asset = AVURLAsset(url: mediaPreviewURL(for: file))
+                let loader = SMBVideoResourceLoader(client: smb, file: file)
+                asset.resourceLoader.setDelegate(loader, queue: DispatchQueue(label: "com.faisalhusayn.kinodrop.thumbnail-loader"))
+                let generator = AVAssetImageGenerator(asset: asset)
+                generator.appliesPreferredTrackTransform = true
+                let result = try await generator.image(at: .zero)
+                let image = UIImage(cgImage: result.image)
+                thumbnailCache[file.id] = image
+                return image
+            } catch {
+                return nil
+            }
+        }
 
         let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("RemoteThumbnails", isDirectory: true)
@@ -287,6 +304,11 @@ final class AppModel: ObservableObject {
             try? FileManager.default.removeItem(at: localURL)
             return nil
         }
+    }
+
+    private func mediaPreviewURL(for file: RemoteFile) -> URL {
+        let name = file.name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? "media"
+        return URL(string: "kinodrop-smb://media/\(name)")!
     }
 
     func open(_ file: RemoteFile) async {

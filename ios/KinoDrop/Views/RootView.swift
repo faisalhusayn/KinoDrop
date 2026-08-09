@@ -705,7 +705,8 @@ private struct SMBRemotePreviewView: View {
     private func preparePlayer() async {
         do {
             if file.isVideo || file.isAudio {
-                guard let url = URL(string: "kinodrop-smb://media/") else { return }
+                let encodedName = file.name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? "media"
+                guard let url = URL(string: "kinodrop-smb://media/\(encodedName)") else { return }
                 let asset = AVURLAsset(url: url)
                 asset.resourceLoader.setDelegate(loader, queue: DispatchQueue(label: "com.faisalhusayn.kinodrop.media-loader"))
                 let newPlayer = AVPlayer(playerItem: AVPlayerItem(asset: asset))
@@ -807,7 +808,7 @@ private struct RemoteFileThumbnail: View {
             }
         }
         .task(id: file.id) {
-            guard file.isPreviewable else { return }
+            guard file.isPreviewable || file.isVideo else { return }
             isLoading = true
             image = await model.thumbnail(for: file)
             isLoading = false
